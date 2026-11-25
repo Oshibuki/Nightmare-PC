@@ -116,6 +116,7 @@ docs/DEVICES.md
 !/docs/adr/*.md
 !/docs/agents/*.md
 !/AGENTS.md
+!/CODING_STANDARDS.md
 !/GLOSSARY.md
 !/backend-patches/README.md
 !/desktop/**/*.md
