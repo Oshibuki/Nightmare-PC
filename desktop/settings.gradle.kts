@@ -5,8 +5,8 @@
 // `app/`, and no Android plugin may be applied.
 pluginManagement {
     repositories {
-        // No google() / mavenOnly-android repositories: desktop has no Android
-        // dependency and must fail loudly if one sneaks in.
+        // Plugin markers resolve from the portal and Maven Central; Google Maven
+        // is needed only for Compose's generic androidx.* dependencies below.
         gradlePluginPortal()
         mavenCentral()
     }
@@ -17,13 +17,17 @@ dependencyResolutionManagement {
     // dependency resolves from here only.
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
+        // Compose 1.12.2 resolves androidx.* common artifacts from Google Maven.
+        // This is a repository, not an Android plugin or target.
+        google()
         mavenCentral()
     }
 }
 
 rootProject.name = "nightmare-desktop"
 
-// Four responsibility areas (ADR-0003): :cli (entry point), :core (logic),
-// engine/ (vendored C++ engine, built outside Gradle) and docs/ (desktop-only
-// documentation). Only the two JVM modules are Gradle projects.
-include(":core", ":cli")
+// Responsibility areas: :cli (headless entry point), :core (shared JVM logic),
+// :gui (Compose Desktop shell), engine/ (vendored C++ engine, built outside
+// Gradle) and docs/ (desktop-only documentation). Only JVM modules are Gradle
+// projects; no Android plugin or target is applied here.
+include(":core", ":cli", ":gui")

@@ -8,6 +8,8 @@
 # binary can never disagree.
 nightmare = "0.1.0"
 kotlin = "2.4.21"
+# Compose compiler ships with Kotlin; Compose Multiplatform has its own cadence.
+compose-plugin = "1.12.2"
 junit = "4.13.2"
 json = "20250517"
 
@@ -18,3 +20,5 @@ json = { module = "org.json:json", version.ref = "json" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+jetbrains-compose = { id = "org.jetbrains.compose", version.ref = "compose-plugin" }
