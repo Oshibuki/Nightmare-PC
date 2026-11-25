@@ -1,0 +1,44 @@
+# Batching
+
+*Run a flow many times with one setting varied each time, or two as a grid.*
+
+Use it to try eight seeds of the same prompt, find the right CFG, or compare step counts
+side by side.
+
+## Steps
+
+1. Open the flow and tap the generator node.
+2. Beside **Seed**, **Steps**, **CFG**, **Denoise** or **Scheduler** there is a small
+   **bars icon**. Tap it: the **Batch** dialog opens with that setting chosen under
+   **what varies**.
+3. Type the values to try under **values**:
+
+    | you type | runs |
+    |---|---|
+    | `1, 2, 3` | exactly those |
+    | `1..8` | 1 to 8 |
+    | `1..10 by 3` | 1, 4, 7, 10 |
+
+    Underneath, the dialog shows how many runs that makes and the values it read.
+4. Tap **Run N** (N is the number of runs). The setting's icon turns violet while it is armed.
+
+## A different prompt for each picture
+
+Tap the **prompt** node. On the **Prompt** box's top edge there is the same **bars icon**. Tap it and write up to 10
+prompts, **one per line** (a prompt's own commas are fine). Each picture takes the next prompt; the negative and every
+other setting stay as they are. The pictures are labelled `prompt 1`, `prompt 2` and so on. A prompt batch combines with
+one other setting, such as 5 prompts × 2 seeds = 10 pictures.
+
+Arm **two** settings and the batch runs every combination, a grid such as 3 CFG values ×
+4 step counts = 12 pictures.
+
+While it runs, the bar shows `batch 3 of 12`. **Stop after this one** finishes the current
+picture and stops.
+
+Every armed sweep is listed on the run bar with a **✕** that releases it, and **Reset node**
+releases the sweeps on that node.
+
+## Where the pictures go
+
+Every run is kept in **Results**, grouped as one card, each picture with the exact flow that
+made it, so the one you like can be reopened with its settings and seed.
