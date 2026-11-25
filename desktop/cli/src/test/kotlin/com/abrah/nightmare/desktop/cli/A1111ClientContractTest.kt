@@ -21,15 +21,15 @@ import java.util.concurrent.TimeUnit
 /**
  * Contract probe for the A1111 subset reachable through `nightmare-desktop serve`.
  *
- * No unmodified third-party A1111 client is installed on the reference machine
- * (see desktop/docs/a1111-client-compat.md), so this is a **contract** test, not
- * a claim of full client certification. The fake engine below speaks the part
- * of `/sdapi/v1/txt2img` that the vendored `sd-server` documents; the test only
- * observes what a client can see: HTTP status, JSON fields, a decodable PNG and
- * the loopback-only engine arguments.
+ * A real, unmodified A1111 client (SillyTavern 1.19.1) was certified against
+ * this service on the reference machine; see desktop/docs/a1111-client-compat.md.
+ * This test is the fast regression guard for the same txt2img subset: the fake
+ * engine below speaks the part of `/sdapi/v1/txt2img` that the vendored
+ * `sd-server` documents, and the assertions observe only what a client can see
+ * -- HTTP status, JSON fields, a decodable PNG and the loopback engine args.
+ * It does not repeat the full client certification.
  *
- * Every wait is bounded: JUnit 30 s, socket 5 s, ready-file 10 s, fake server
- * 12 s, future 20 s. A missing request fails instead of hanging the suite.
+ * Every wait is bounded; a missing request fails instead of hanging the suite.
  */
 class A1111ClientContractTest {
 
@@ -106,7 +106,7 @@ class A1111ClientContractTest {
             |            'height': payload.get('height', 0),
             |            'sampler_name': payload.get('sampler_name', ''),
             |            'version': 'stable-diffusion.cpp',
-            |        })
+            |        }, separators=(',', ':'))
             |        body = json.dumps({'images': [image], 'parameters': payload, 'info': info}).encode()
             |        self.send_response(200)
             |        self.send_header('Content-Type', 'application/json')
@@ -176,19 +176,37 @@ class A1111ClientContractTest {
         return connection.inputStream.bufferedReader().use { it.readText() }
     }
 
+    private fun argValue(argv: List<String>, flag: String): String? {
+        val i = argv.indexOf(flag)
+        return if (i >= 0 && i + 1 < argv.size) argv[i + 1] else null
+    }
+
     @Test(timeout = 30000)
     fun anA1111StylePostYieldsParametersInfoAndADecodablePng() {
-        val engine = fakeSdServer(TestPng.file(dir, 64, 64, "contract.png"))
-        val served = serve(engine)
+        // The real engine embeds a parameters chunk; the stub must carry one
+        // too, or a missing-metadata defect could never fail this test.
+        val png = TestPng.fileWithParameters(
+            dir, 64, 64, "a red fox, photograph\nSeed: 1234", "contract.png",
+        )
+        val engine = fakeSdServer(png)
+        val engineExit = serve(engine)
         try {
             awaitReady()
             val response = postA1111Request()
 
-            assertTrue("an A1111 client expects images: $response", response.contains("\"images\""))
-            assertTrue("an A1111 client expects parameters: $response", response.contains("\"parameters\""))
-            assertTrue("an A1111 client expects info: $response", response.contains("\"info\""))
-            assertTrue("info should name the engine: $response", response.contains("stable-diffusion.cpp"))
+            for (field in listOf("images", "parameters", "info")) {
+                assertTrue("an A1111 client expects '$field': $response", response.contains("\"$field\""))
+            }
             assertTrue("the request should be echoed: $response", response.contains("a red fox, photograph"))
+
+            // routes_sdapi.cpp writes info as a JSON *string*, not an object.
+            val info = response.substringAfter("\"info\": \"")
+                .substringBeforeLast("\"}")
+                .replace("\\\"", "\"")
+            assertTrue("info must be a JSON string, got: $info", info.startsWith("{"))
+            for (field in listOf("\"seed\":1234", "\"steps\":1", "\"version\":\"stable-diffusion.cpp\"")) {
+                assertTrue("info should carry $field: $info", info.contains(field))
+            }
 
             val encoded = Regex("\"images\"\\s*:\\s*\\[\\s*\"([A-Za-z0-9+/=]+)\"")
                 .find(response)?.groupValues?.get(1)
@@ -199,23 +217,24 @@ class A1111ClientContractTest {
             val ihdr = chunks.first { it.first == "IHDR" }.second
             assertEquals(64, ByteBuffer.wrap(ihdr, 0, 4).int)
             assertEquals(64, ByteBuffer.wrap(ihdr, 4, 4).int)
+            val parameters = TestPng.parameters(received)
+            assertTrue("the image must carry parameters: $chunks", parameters != null)
+            assertTrue("the parameters must name the prompt: $parameters", parameters!!.contains("a red fox"))
+            assertTrue("the parameters must name the seed: $parameters", parameters.contains("1234"))
 
             val forwarded = requestFile.readText()
             for (field in listOf("negative_prompt", "cfg_scale", "sampler_name", "scheduler", "seed")) {
                 assertTrue("the engine must receive '$field': $forwarded", forwarded.contains(field))
             }
             val argv = argvFile.readLines()
-            assertTrue(
-                "engine must bind loopback, got $argv",
-                argv.indexOf("--listen-ip").let { it >= 0 && argv[it + 1] == "127.0.0.1" },
-            )
-            assertTrue(
+            assertEquals("engine must bind loopback, got $argv", "127.0.0.1", argValue(argv, "--listen-ip"))
+            assertEquals(
                 "engine must use the selected port, got $argv",
-                argv.indexOf("--listen-port").let { it >= 0 && argv[it + 1] == port.toString() },
+                port.toString(), argValue(argv, "--listen-port"),
             )
-            assertEquals("engine output must be forwarded: $out", 0, served.get(20, TimeUnit.SECONDS))
+            assertEquals("engine output must be forwarded: $out", 0, engineExit.get(20, TimeUnit.SECONDS))
         } finally {
-            served.get(20, TimeUnit.SECONDS)
+            engineExit.get(20, TimeUnit.SECONDS)
         }
     }
 }

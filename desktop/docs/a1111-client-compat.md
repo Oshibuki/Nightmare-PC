@@ -14,7 +14,7 @@ against A1111's API is.
 | Client | SillyTavern 1.19.1 at `/home/chjlxxc/Applications/SillyTavern` |
 | Unmodified | `git status --short` shows no tracked changes; the request path is `src/endpoints/stable-diffusion.js:297-350`, which POSTs to `/sdapi/v1/txt2img` |
 | Client start | `node server.js --port 9351 --disableCsrf` (flags only, no source edits) |
-| Generation backend | `nightmare-desktop serve --model ~/.cache/nightmare-desktop/models/sd15/v1-5-pruned-emaonly.safetensors --port 1234 --engine <ticket-07 worktree>/desktop/engine/build/bin/sd-server` |
+| Local HTTP API | `nightmare-desktop serve --model ~/.cache/nightmare-desktop/models/sd15/v1-5-pruned-emaonly.safetensors --port 1234 --engine <ticket-07 worktree>/desktop/engine/build/bin/sd-server` |
 | Client call | `POST http://127.0.0.1:9351/api/sd/generate` with `url=http://127.0.0.1:1234`, `prompt`, `negative_prompt`, `steps=1`, `cfg_scale=1.5`, `width=64`, `height=64`, `seed=1234`, `sampler_name=euler`, `scheduler=discrete`, `batch_size=1` |
 | Result | HTTP 200 in 2.35 s; engine logged `generate_image completed in 2.34s` |
 
