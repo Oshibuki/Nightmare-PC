@@ -99,3 +99,78 @@ echo "GGML_SHA=$(git -C ggml rev-parse HEAD)" # f8758628270072da26ad44baf5e189d4
 - 新增/升级引擎版本 = 改这张表 + 改工单 07 的 vendor 脚本，两者必须同一次提交，且提交信息里写清为什么升级。
 - 补丁集（`backend-patches/`）的适用性**绑定在 sdcpp SHA 上**：`dit/*.patch` 是针对 `35a3d48b` 的树写的，换 SHA 就要重新验证每个补丁仍然打得上、且不是静默 no-op。
 - 本文件不记录构建产物哈希（`libdit_engine.so` 的字节数与 sha256 随 NDK/编译器/补丁变化），那些属于每次构建的摘要，不属于版本档案。
+
+---
+
+# 本地构建记录
+
+**实测日期：2026-11-25** ｜ 产出工单：Phase 0 / 07 ｜ 机器：Linux x86_64，16 核 / 12 GB，无 root
+
+这一节是**构建摘要**，不是版本档案：上面那三个 SHA 才是版本真相，本节记录的是"用本机工具链把 `35a3d48b` + `f8758628` 编出来"这件事本身。换编译器/换机器，下面的耗时会变，SHA 不会。
+
+## 入口
+
+`desktop/engine/build.sh`（用法与依赖见 `README.md`）。默认构建是**干净基线**：不应用任何补丁。
+
+```bash
+# CPU（默认）
+./desktop/engine/build.sh
+
+# Vulkan（独立 build 目录）
+./desktop/engine/build.sh --vulkan \
+  --cmake-arg "-DCMAKE_PREFIX_PATH=$HOME/.cache/nightmare-desktop/vendor/spirv-headers-install" \
+  --cmake-arg "-DCMAKE_CXX_FLAGS=-I$HOME/.cache/nightmare-desktop/vendor/spirv-headers-install/include"
+```
+
+Vulkan 那条为什么需要两个 `--cmake-arg`：`ggml/src/ggml-vulkan/CMakeLists.txt` 做了 `find_package(SPIRV-Headers CONFIG REQUIRED)` 却**没有**把导入目标的 include 目录加到编译行。本机无 root、无 Vulkan SDK，只能把 SPIRV-Headers 装到本地 prefix 再手动注入。
+
+## 实测结果
+
+| 项 | CPU | Vulkan |
+|---|---|---|
+| 退出码 | `0` | `0` |
+| 墙钟耗时 | **2m10s** | **3m10s** |
+| 并行度 | `-j8` | `-j8` |
+| 构建目录 | `desktop/engine/build` | `desktop/engine/build-vulkan` |
+| 产物 | `build/bin/sd-cli`（57 MB，静态链接） | `build-vulkan/bin/sd-cli`（94 MB，静态链接） |
+| `sd-cli --version` | `stable-diffusion.cpp version unknown, commit 35a3d48` | 同左 |
+| `sd-cli --help` 退出码 | `0` | `0` |
+| `GGML_HEXAGON` | `OFF` | `OFF` |
+| `SD_VULKAN` | `OFF` | `ON` |
+| `ggml-vulkan` 目标 | 不存在 | 已构建（`[ 87%] Built target ggml-vulkan`） |
+| 共享缓存 | `~/.cache/nightmare-desktop/engine/sd-cli` | `~/.cache/nightmare-desktop/engine/sd-cli-vulkan` |
+
+两个构建同时编出了 `sd-cli` 与 `sd-server`（`SD_BUILD_EXAMPLES=ON` 会把 `examples/server` 一并构建）。
+
+Vulkan **可编译**，但**未做运行时验证**：本机没有跑一次 Vulkan 推理，所以"Vulkan 后端在运行时能用"这件事不在此节的结论范围内。
+
+## Hexagon 关闭的证据（编译期）
+
+源码树里有 hexagon 源文件是正常的（fork 自带，`GGML_HEXAGON=OFF` 时是死代码）。验收看的是构建配置与目标：
+
+```
+$ grep -i hexagon desktop/engine/build/CMakeCache.txt
+//ggml: enable Hexagon backend
+GGML_HEXAGON:BOOL=OFF
+
+$ cmake --build desktop/engine/build --target help | grep -i hexagon
+$ echo $?
+1                      # 无匹配
+
+$ (cmake --build build --target help; cat build/CMakeFiles/TargetDirectories.txt) | grep -ci hexagon
+0
+
+$ find build -name '*hexagon*'
+（无输出）
+```
+
+Vulkan 构建树同样 `GGML_HEXAGON:BOOL=OFF`，同样没有任何 hexagon 目标或产物。
+
+⚠ 一个容易误判的细节：Vulkan 树的 `CMakeCache.txt` 里是 `GGML_VULKAN:UNINITIALIZED=ON` 而不是 `:BOOL=ON`。原因是 sdcpp 的 `CMakeLists.txt` 在 `ggml` 的 `option()` 之前就用普通变量把 `GGML_VULKAN` 设成了 ON，命令行 `-D` 因此保留 `UNINITIALIZED` 类型。值确实是 ON，`ggml-vulkan` 也确实被构建——这两条才是证据。
+
+## 本次没有做的事
+
+- **没有应用任何补丁。** 工单 03 的实测结论是根级 `001`–`058` 与所有公开 tag 已脱节，`dit/*.sdcpp.patch` 只有 37/57 能 `--check`。所以本次构建是干净基线，`--patch` 钩子只做了实现与 dry-run 验证，没有对真实补丁跑过一次完整构建。
+- **没有跑推理。** 本节只覆盖"能编出来"，SD1.5 冒烟属于工单 08。
+- **没有验证 Vulkan 运行时。** 见上。
+
