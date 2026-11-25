@@ -1,8 +1,9 @@
 # 02: 节点链编辑的交互形态
 
 Type: wayfinder:prototype
-Status: open
+Status: claimed
 Blocked by: 08
+Prototype: prototype/02-node-chain-interaction @ 01a2d26
 
 ## Question
 
