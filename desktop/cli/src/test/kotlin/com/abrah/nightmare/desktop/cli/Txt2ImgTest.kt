@@ -33,9 +33,37 @@ class Txt2ImgTest {
     fun setUp() {
         assumeTrue("/bin/sh is required by the fake engine", File("/bin/sh").exists())
         dir = Files.createTempDirectory("nm-cli-test").toFile()
-        model = File(dir, "model.safetensors").apply { writeText("not really a model") }
+        // ⚠ A real header, not a placeholder: `--model` is checked against the
+        // file's own bytes before the engine starts (ticket 13), so the fixture
+        // has to be a safetensors file the same way a download would be.
+        model = safetensors("model.safetensors")
         argvFile = File(dir, "argv.txt")
         outPng = File(dir, "out.png")
+    }
+
+    /** A safetensors file with one F16 tensor -- header only, no weights to read. */
+    private fun safetensors(name: String): File {
+        val json = """{"w":{"dtype":"F16","shape":[2],"data_offsets":[0,4]}}"""
+        val header = json.toByteArray(Charsets.UTF_8)
+        val bytes = ByteBuffer.allocate(8 + header.size)
+            .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            .putLong(header.size.toLong())
+            .put(header)
+            .array()
+        return File(dir, name).apply { writeBytes(bytes) }
+    }
+
+    /** A GGUF file whose header declares one F32 tensor. */
+    private fun gguf(name: String): File {
+        val out = java.io.ByteArrayOutputStream()
+        fun u32(v: Int) = out.write(ByteBuffer.allocate(4).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(v).array())
+        fun u64(v: Long) = out.write(ByteBuffer.allocate(8).order(java.nio.ByteOrder.LITTLE_ENDIAN).putLong(v).array())
+        out.write(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()))
+        u32(3); u64(1L); u64(0L)
+        val weight = "w".toByteArray(Charsets.UTF_8)
+        u64(weight.size.toLong()); out.write(weight)
+        u32(1); u64(4L); u32(0); u64(0L)
+        return File(dir, name).apply { writeBytes(out.toByteArray()) }
     }
 
     private fun run(vararg args: String): Int = Cli.run(args.toList(), out, err)
@@ -352,5 +380,73 @@ class Txt2ImgTest {
         assertTrue("engine output should reach stdout: $out", out.contains("fake engine: generating"))
         assertTrue("the PNG should be where --out said", outPng.isFile)
         assertTrue("success must not write to stderr: $err", err.isEmpty())
+    }
+
+    // ---- what --model will and will not accept (ticket 13) -----------------
+
+    @Test
+    fun `a model whose bytes disagree with its extension fails before the engine starts`() {
+        val engine = fakeEngine(stubPng(512, 512))
+        model.writeText("this was never a safetensors file")
+
+        val code = txt2img(engine)
+
+        assertEquals("stderr: $err", 1, code)
+        assertTrue("stderr should name the file: $err", err.contains(model.absolutePath))
+        assertTrue("stderr should say it is not a safetensors file: $err", err.contains("not a safetensors file"))
+        assertTrue("the engine must not run on an unreadable model: $argvFile", !argvFile.exists())
+    }
+
+    @Test
+    fun `a model in a format this build cannot read is a usage error`() {
+        val engine = fakeEngine(stubPng(512, 512))
+        val ckpt = File(dir, "legacy.ckpt").apply { writeText("pickle") }
+
+        val code = run(
+            "txt2img",
+            "--model", ckpt.absolutePath,
+            "--prompt", "a red fox",
+            "--out", outPng.absolutePath,
+            "--engine", engine.absolutePath,
+        )
+
+        assertEquals("stderr: $err", 2, code)
+        assertTrue("stderr should name the extension: $err", err.contains(".ckpt"))
+        assertTrue("stderr should say what is supported: $err", err.contains(".safetensors"))
+        assertTrue("the engine must not run on an unsupported format: $argvFile", !argvFile.exists())
+    }
+
+    @Test
+    fun `a gguf model is refused with a pointer to --diffusion-model, not passed to the engine`() {
+        val engine = fakeEngine(stubPng(512, 512))
+        val diffusion = gguf("diffusion_model.gguf")
+
+        val code = run(
+            "txt2img",
+            "--model", diffusion.absolutePath,
+            "--prompt", "a red fox",
+            "--out", outPng.absolutePath,
+            "--engine", engine.absolutePath,
+        )
+
+        assertEquals("stderr: $err", 1, code)
+        assertTrue("stderr should name the file: $err", err.contains(diffusion.absolutePath))
+        assertTrue("stderr should point at --diffusion-model: $err", err.contains("--diffusion-model"))
+        assertTrue("stderr should say nothing was generated: $err", err.contains("nothing was generated"))
+        assertTrue("a gguf must never reach '-m': $argvFile", !argvFile.exists())
+        assertTrue("no image should be written: $outPng", !outPng.exists())
+    }
+
+    @Test
+    fun `an unreadable model fails and says so`() {
+        val engine = fakeEngine(stubPng(512, 512))
+        assumeTrue("chmod 000 is meaningless as root", System.getProperty("user.name") != "root")
+        assertTrue("fixture must be made unreadable", model.setReadable(false))
+
+        val code = txt2img(engine)
+
+        assertEquals("stderr: $err", 1, code)
+        assertTrue("stderr should say it is not readable: $err", err.contains("not readable"))
+        assertTrue("the engine must not run: $argvFile", !argvFile.exists())
     }
 }

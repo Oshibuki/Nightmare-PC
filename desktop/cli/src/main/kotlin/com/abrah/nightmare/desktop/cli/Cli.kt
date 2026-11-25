@@ -1,5 +1,6 @@
 package com.abrah.nightmare.desktop.cli
 
+import com.abrah.nightmare.desktop.core.ModelLibrary
 import com.abrah.nightmare.desktop.core.ProductIdentity
 
 /**
@@ -44,6 +45,7 @@ object Cli {
                 EXIT_OK
             }
             Txt2Img.NAME -> Txt2Img.run(args.drop(1), out, err, env)
+            Models.NAME -> Models.run(args.drop(1), out, err, env)
             else -> {
                 err.append(usageError("unrecognised argument '$first'"))
                 EXIT_USAGE
@@ -63,6 +65,7 @@ object Cli {
         |Usage:
         |  ${ProductIdentity.NAME} <option>
         |  ${ProductIdentity.NAME} txt2img --model <path> --prompt <text> --out <path> [options]
+        |  ${ProductIdentity.NAME} models list [--dir <path>]
         |
         |Options:
         |  -h, --help     Show this help and exit.
@@ -70,9 +73,12 @@ object Cli {
         |
         |Commands:
         |  txt2img        Generate one image from a prompt with the vendored engine.
+        |  models list    List the models in the local library, with their format.
         |
         |txt2img options:
-        |      --model <path>              Model file to load (required).
+        |      --model <path>              Model file to load (required). A single-file
+        |                                  .safetensors checkpoint; its header is checked
+        |                                  before the engine starts.
         |      --prompt <text>             Prompt to render (required).
         |      --out <path>                PNG file to write (required).
         |      --negative-prompt <text>    Negative prompt (default: empty).
@@ -83,9 +89,13 @@ object Cli {
         |      --engine <path>             sd-cli binary to run. Defaults to
         |                                  ${'$'}NIGHTMARE_SD_BIN, then ${Txt2Img.DEFAULT_ENGINE}.
         |
+        |models list options:
+        |      --dir <path>                Directory to scan. Defaults to
+        |                                  ${'$'}${ModelLibrary.ENV_MODELS}, then ~/${ModelLibrary.DEFAULT_SUBPATH}.
+        |
         |Exit codes:
-        |  0  the image was generated
-        |  1  generation failed (missing model, engine error, unusable output)
+        |  0  the request was served (an empty model library included)
+        |  1  it failed (missing model or library, engine error, unusable output)
         |  2  the command line was wrong
         |
         |Model weights are not committed; see desktop/docs/models.md.

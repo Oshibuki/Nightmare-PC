@@ -1,9 +1,11 @@
 package com.abrah.nightmare.desktop.cli
 
+import com.abrah.nightmare.desktop.core.ModelFile
 import com.abrah.nightmare.desktop.core.ProductIdentity
 import java.io.File
 import java.io.Flushable
 import java.io.IOException
+import java.nio.file.Paths
 
 /**
  * `txt2img`: prompt in, PNG out, by running the vendored engine's `sd-cli` as a
@@ -15,6 +17,10 @@ import java.io.IOException
  * goes, it can crash without taking this JVM with it, and the contract between
  * the two is a command line plus a PNG file, which is exactly what the tests
  * can fake.
+ *
+ * ⚠ `--model` is checked against its own header before the engine starts (see
+ * [ModelFile]): a half-downloaded checkpoint otherwise costs minutes of model
+ * loading and ends in a crash or a noise image.
  */
 internal object Txt2Img {
 
@@ -36,7 +42,7 @@ internal object Txt2Img {
 
     fun run(args: List<String>, out: Appendable, err: Appendable, env: Map<String, String>): Int {
         val request = try {
-            parse(args)
+            parse(args).also { requireLoadableModel(it.model) }
         } catch (e: UsageException) {
             err.append(usageError(e.message ?: "bad arguments"))
             return Cli.EXIT_USAGE
@@ -47,6 +53,32 @@ internal object Txt2Img {
         val model = File(request.model)
         if (!model.isFile) {
             err.append(failure("model '${request.model}' does not exist or is not a file"))
+            return Cli.EXIT_FAILURE
+        }
+        if (!model.canRead()) {
+            err.append(failure("model '${request.model}' is not readable"))
+            return Cli.EXIT_FAILURE
+        }
+        // ⚠ The name is a claim; the header is the evidence. This is the check
+        // that turns "the engine crashed after four minutes" into one line.
+        val contents = try {
+            ModelFile.read(model.toPath())
+        } catch (e: IOException) {
+            err.append(failure("model '${request.model}' is not usable: ${e.message}"))
+            return Cli.EXIT_FAILURE
+        }
+        if (contents is ModelFile.Contents.Gguf) {
+            // ⚠ Never fall through to `-m`: sd-cli's `-m` is a single-file
+            // checkpoint, so a DiT GGUF given there loads the wrong thing and
+            // renders noise. Refusing is the only honest answer until the DiT
+            // path exists.
+            err.append(
+                failure(
+                    "model '${request.model}' is a GGUF diffusion model. Those are loaded with " +
+                        "--diffusion-model (plus --llm and --vae), which this build does not implement yet; " +
+                        "nothing was generated. Pass a single-file .safetensors checkpoint to --model.",
+                ),
+            )
             return Cli.EXIT_FAILURE
         }
         val engine = File(request.engine ?: env[ENV_ENGINE] ?: DEFAULT_ENGINE)
@@ -116,6 +148,20 @@ internal object Txt2Img {
         return Cli.EXIT_OK
     }
 
+    /**
+     * A path whose extension is not a format this build reads is a mistake in
+     * the command line, not a broken file -- so it exits 2 and says which
+     * extensions exist. Checked before the file is even opened.
+     */
+    private fun requireLoadableModel(path: String) {
+        if (ModelFile.formatOf(Paths.get(path)) == null) {
+            throw UsageException(
+                "--model '${File(path).name}' is not a model file this build reads " +
+                    "(supported: ${ModelFile.EXTENSIONS.joinToString(", ") { ".$it" }})",
+            )
+        }
+    }
+
     /** Everything the engine call needs, after the command line has been checked. */
     private class Request(
         val model: String,
@@ -129,10 +175,8 @@ internal object Txt2Img {
         val engine: String?,
     )
 
-    private class UsageException(message: String) : Exception(message)
-
     private fun parse(args: List<String>): Request {
-        val options = parseOptions(args)
+        val options = Options.parse(args, KNOWN_OPTIONS)
         return Request(
             model = options.required("model"),
             prompt = options.required("prompt"),
@@ -146,51 +190,6 @@ internal object Txt2Img {
             } ?: DEFAULT_SEED,
             engine = options["engine"],
         )
-    }
-
-    private fun parseOptions(args: List<String>): Map<String, String> {
-        val options = LinkedHashMap<String, String>()
-        var i = 0
-        while (i < args.size) {
-            val token = args[i]
-            if (!token.startsWith("--")) {
-                throw UsageException("unexpected argument '$token'")
-            }
-            val body = token.removePrefix("--")
-            val equals = body.indexOf('=')
-            if (equals >= 0) {
-                val name = body.substring(0, equals)
-                requireKnown(name)
-                options[name] = body.substring(equals + 1)
-                i += 1
-            } else {
-                requireKnown(body)
-                if (i + 1 >= args.size) {
-                    throw UsageException("option '--$body' needs a value")
-                }
-                options[body] = args[i + 1]
-                i += 2
-            }
-        }
-        return options
-    }
-
-    private fun requireKnown(name: String) {
-        if (name !in KNOWN_OPTIONS) throw UsageException("unrecognised option '--$name'")
-    }
-
-    private fun Map<String, String>.required(name: String): String {
-        val value = this[name] ?: throw UsageException("missing required option '--$name'")
-        if (value.isBlank()) throw UsageException("option '--$name' must not be empty")
-        return value
-    }
-
-    private fun Map<String, String>.positiveInt(name: String, default: Int): Int {
-        val raw = this[name] ?: return default
-        val value = raw.toIntOrNull()
-            ?: throw UsageException("option '--$name' needs an integer, got '$raw'")
-        if (value <= 0) throw UsageException("option '--$name' must be positive, got $value")
-        return value
     }
 
     /**
