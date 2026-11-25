@@ -23,6 +23,7 @@ a build recipe.
 6. [The patch set is not a prerequisite for Phase 1 models](#the-patch-set-is-not-a-prerequisite-for-phase-1-models)
 7. [Coverage guard](#coverage-guard)
 8. [Borderline rows and risks](#borderline-rows-and-risks)
+9. [Deferred patch verdicts](#deferred-patch-verdicts)
 
 ## Verdicts and baseline availability
 
@@ -33,7 +34,7 @@ a build recipe.
 | `portable` | platform-independent engine or wrapper work — model loading, `--type` dispatch, pipeline and sampler parameters, VAE tiling, request validation, the HTTP surface, progress output, LoRA. A desktop build wants these. |
 | `excluded-hexagon` | Hexagon / QNN only: NPU kernels, HTP graphs, `src/ggml-hexagon/`, QNN session plumbing. No desktop counterpart, and `GGML_HEXAGON=OFF` (ADR-0002). |
 | `excluded-mobile-gpu` | Adreno OpenCL / MNN only: the GPU paths a phone runs. A desktop Vulkan/Metal build does not run these kernels and MNN is never linked. |
-| `deferred` | `fused` / `graph-cut` / `spike` experiments. Not excluded and not adopted: whether a fused op is worth carrying depends on desktop measurements Phase 1 has not made. |
+| `deferred` | `fused` / `graph-cut` / `spike` experiments. Ticket 09's classification only; [ticket 22](#deferred-patch-verdicts) gives each of these rows its own desktop conclusion and reason. |
 
 `Baseline` is the answer to "does it apply to the pinned tree as it stands":
 
@@ -485,7 +486,10 @@ A table of 194 rows is only an inventory if every file is in it. The guard is
 * it asserts the line carrying a patch names **exactly one** of the four
   verdicts, so a row cannot be added without a verdict;
 * it asserts the counts add up to the number of files on disk, so a row cannot
-  be quietly dropped from a section header either.
+  be quietly dropped from a section header either;
+* it asserts [the ticket-22 section](#deferred-patch-verdicts) has exactly one
+  conclusion row per `deferred` patch, one conclusion and a reason per row, no
+  duplicate reasons, and the conclusion recorded for each patch.
 
 The repository root reaches the test as the `nightmare.repoRoot` system
 property, set from `desktop/core/build.gradle.kts`, so the test works from a
@@ -529,6 +533,58 @@ row: the test goes red. That is the whole point of it.
   catches a stale verdict except re-running the measurement. Re-run it when
   `ENGINES.md` changes — the README's own rule is that applicability is bound
   to the `sdcpp` SHA.
+
+## Deferred patch verdicts
+
+Ticket 09 gave the 18 `fused` / `graph-cut` / `spike` rows one shared
+`deferred` verdict. Ticket 22 settles them one by one; the `[verdict]` column
+above is unchanged so the 09 counts stay reproducible. "Conclusion" here means
+**whether a desktop build should carry this patch**, not whether its text
+`--check`s (that is `Baseline`):
+
+| conclusion | meaning |
+|---|---|
+| `applicable` | carry it in the desktop build as-is, no further condition |
+| `excluded` | no desktop target or no desktop workload; do not carry it |
+| `conditional` | carry it only under the stated condition, and re-check it against the pin |
+
+Evidence used for these rows, read from the pinned tree rather than inferred
+from patch names: `desktop/engine/build.sh` sets `-DGGML_HEXAGON=OFF` and
+`-DSD_BUILD_EXAMPLES=ON` (Vulkan builds add `SD_VULKAN=ON`/`GGML_VULKAN=ON`);
+the CPU backend's `ggml_backend_supports_op` returns false for
+`GGML_OP_QKNORM_ROPE` and the pinned Vulkan backend has no such kernel, so an
+HTP `qknorm_rope` fused path always falls back on desktop; CPU *does* support
+F32 `GGML_OP_MODULATE` and `GGML_OP_GATED_RESIDUAL`; and the Phase 1 model list
+in [the patch-set section](#the-patch-set-is-not-a-prerequisite-for-phase-1-models)
+does not include Anima, Ideogram 4, MOSS-Image, Iris, FLUX.3, Wan or MiniMax H3.
+The mobile-only cache regressions quoted inside the patches are **not** desktop
+measurements. No patch was applied to produce this section.
+
+| source path | conclusion | reason / condition |
+|---|---|---|
+| `dit/007-qwen21-graph-cut.sdcpp.patch` | `conditional` | Qwen Image 2.1 is a Phase 1 DiT and graph cutting is compiled on desktop, but cuts only run under a memory budget such as `--max-vram`, which the desktop CLI does not expose; adopt for direct `sd-cli` use only after an A/B of peak memory and output. |
+| `dit/008-anima-fused-ops.sdcpp.patch` | `conditional` | `Flux::modulate`/`gated_residual` F32 ops are supported by the desktop CPU backend, so this really changes the graph there; its `qknorm_rope` half stays HTP-only. Adopt only for Anima workloads after a desktop numeric and timing A/B. |
+| `dit/009-wan-fused-ops.sdcpp.patch` | `excluded` | Wan video is out of scope (`spec.md` Out of Scope); the fused rope needs HTP `qknorm_rope`, which desktop CPU/Vulkan reject, and the CPU modulate paths have no Phase 1 workload to justify the change. |
+| `dit/029-ideogram4-fused-rope.sdcpp.patch` | `excluded` | Ideogram 4's fused `qknorm_rope` is HTP-only; CPU reports `GGML_OP_QKNORM_ROPE` unsupported and Vulkan has no kernel, so desktop always takes the unchanged composed path, for a model Phase 1 does not ship. |
+| `dit/035-moss-fused-rope.sdcpp.patch` | `excluded` | Same HTP-only fused rope as `dit/029` on MOSS-Image, and this row already fails `--check`; desktop CPU/Vulkan take the composed fallback, so there is nothing to adopt. |
+| `dit/037-iris-fused-rope.sdcpp.patch` | `excluded` | Iris's rope table is already interleaved, but the fused kernel is still HTP-only; desktop CPU/Vulkan report it unsupported and keep the composed path unchanged. |
+| `dit/043-flux3-fused-rope.sdcpp.patch` | `excluded` | Flux3 fused rope targets a model the pinned engine does not ship (`dit/042` would create it and does not apply); desktop CPU/Vulkan reject the fused op in any case. |
+| `dit/055-flux3-graph-cut.sdcpp.patch` | `excluded` | Its cut marks target that same absent Flux3 model and depend on `dit/042`; FLUX.2 Klein is native in the pin and is the Phase 1 target, so this cut has no desktop subject. |
+| `dit/060-graph-cut-use-counts.sdcpp.patch` | `conditional` | Repairs `use_counts` inside cut segments; Hexagon fusion (ADR-0002) is the stated consumer, while Vulkan reads it only for QSA top-k fusion that no Phase 1 model uses. Revisit only if a desktop Vulkan graph-cut workload needs that fusion, with an A/B. |
+| `dit/071-minimax-h3-fused-partial-rope.sdcpp.patch` | `excluded` | MiniMax H3 video is out of scope; the fused rope is HTP-only and the added table padding only makes the composed path view the same first pairs. No desktop workload and no desktop gain. |
+| `dit/074-minimax-h3-vae-fused-rope.sdcpp.patch` | `excluded` | H3 VAE fused rope is HTP-only, and its padded table likewise only preserves the composed path; with H3 out of scope there is no desktop model to justify it. |
+| `dit/093-moss-lora-fused-qkv.sdcpp.patch` | `conditional` | A platform-independent LoRA rename for MOSS-Image weights with fused `proj.qkv`, and it applies; adopt only when such a LoRA is actually imported on desktop, after checking that the renamed tensors bind. |
+| `dit/094-lowres-spectrum-spike.sdcpp.patch` | `conditional` | `NM_LOWRES`/`NM_SPECTRUM` sampling experiment that trades image fidelity for speed and is off by default; adopt only as an opt-in desktop experiment after a quality-and-time A/B. |
+| `dit/095-keep-runners-spike.sdcpp.patch` | `conditional` | Env-gated cross-render weight retention that also fails `--check`; adopt only if desktop needs it, after rebasing and re-verifying LoRA/model invalidation. |
+| `dit/spike-dit-no-fa.patch` | `excluded` | Android-wrapper diagnostic for an HTP fp16 `q.k` overflow, marked test only; its `dit/DitEngine.cpp` target is absent from the desktop tree and there is no desktop flash-attention equivalent to toggle. |
+| `dit/spike-nan-probe.sdcpp.patch` | `conditional` | Applies and can locate NaNs on desktop, but it also changes scheduler eval-callback registration; adopt only as a temporary debugging aid after that path is verified. |
+| `dit/spike-sd-cli.patch` | `excluded` | It only flips `SD_BUILD_EXAMPLES` to ON in the Android wrapper's `dit/CMakeLists.txt`; `build.sh` already sets `-DSD_BUILD_EXAMPLES=ON` for desktop and the target file is absent, so it is redundant. |
+| `dit/spike-segment-timing.sdcpp.patch` | `conditional` | Applies and adds a `LOG_INFO` timing line only when a graph is cut into several segments; adopt for desktop profiling of segmented runs, then drop it before shipping. |
+
+The HTP-fused rows are not `excluded-hexagon` by the ticket-09 name rule, and
+this section does not change that classification: they are deferred by name but
+excluded here for a measured backend reason. Re-run the checks above when
+`ENGINES.md` changes, as with every other row.
 
 ---
 
