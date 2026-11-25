@@ -16,3 +16,4 @@
 - 2026-11-25：合并 `a5b9b75` 纳入集成分支 `7ea8fbc`（工单 18 的多文件模型通路）；`Txt2Img.kt` 冲突已消解，保留 `ModelChoice.engineArgs()` 与 LoRA 参数。`--no-build-cache cleanTest build` 全绿（`/tmp/ticket16-merged-nocache-build.log`）。
 - 2026-11-25：真实出图用缓存的 `v1-5-pruned-emaonly.safetensors` + `lora/lcm-sd15.safetensors`，512×512 / 4 步 / seed 42，退出码 0、耗时 125 s，引擎日志显示 `834/834 LoRA tensors applied`；产物 `/tmp/ticket16-real-lora-merged.png` 为可打开的 512×512 PNG，`parameters` 含 `Lora: lcm-sd15.safetensors@0.8`（日志 `/tmp/ticket16-real-lora-merged.log`）。真实出图是条件可用的额外验证，不是本单硬前置。
 - 2026-11-25：DiT LoRA 的 ABI 补丁链不在本单范围（工单 23）。本单只使用 pinned sdcpp 原生的 `--lora-model-dir` / `<lora:...>` 能力。
+- 2026-11-25：再次合并集成分支 `4aab3c4`（工单 17/22），合并提交 `6c7c64a` 无冲突；最终 `--no-build-cache cleanTest build` 全绿，143 个测试通过（`/tmp/ticket16-final-build.log`）。
