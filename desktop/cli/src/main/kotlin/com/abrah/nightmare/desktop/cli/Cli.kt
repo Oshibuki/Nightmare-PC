@@ -103,6 +103,12 @@ object Cli {
         |                                  seed incrementing from --seed, and named
         |                                  <stem>-<i>.png after the first, which
         |                                  keeps the --out path.
+        |      --lora <file>[@mult]        SD LoRA to apply; the multiplier defaults
+        |                                  to 1 and may be negative. Repeat the flag
+        |                                  or comma-separate several: --lora a@0.6,b.
+        |      --lora-dir <path>           Folder holding the LoRA weights. Defaults
+        |                                  to ${'$'}NIGHTMARE_MODELS/lora, then
+        |                                  ~/${ModelLibrary.DEFAULT_SUBPATH}/lora.
         |      --engine <path>             sd-cli binary to run. Defaults to
         |                                  ${'$'}NIGHTMARE_SD_BIN, then ${Txt2Img.DEFAULT_ENGINE}.
         |
@@ -113,7 +119,8 @@ object Cli {
         |Progress goes to stdout: one "[i/N] seed=<seed> -> <path>" line per image,
         |then the engine's own output as it arrives. Each PNG carries an
         |A1111-style "parameters" chunk (prompt, negative prompt, steps, sampler,
-        |schedule, CFG scale, seed, size) so a batch can be reproduced later.
+        |schedule, CFG scale, seed, size, model, LoRAs) so a batch can be
+        |reproduced later. Prompt-embedded <lora:name:mult> tags are read too.
         |
         |Exit codes:
         |  0  the request was served (an empty model library included)

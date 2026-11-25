@@ -1,6 +1,9 @@
 package com.abrah.nightmare.desktop.cli
 
+import com.abrah.nightmare.LoraSpec
+import com.abrah.nightmare.PromptLoras
 import com.abrah.nightmare.desktop.core.ModelFile
+import com.abrah.nightmare.desktop.core.ModelLibrary
 import com.abrah.nightmare.desktop.core.ProductIdentity
 import com.abrah.nightmare.desktop.core.SamplerWire
 import java.io.File
@@ -72,11 +75,12 @@ internal object Txt2Img {
     private val KNOWN_OPTIONS = setOf(
         "model", "prompt", "negative-prompt", "width", "height",
         "steps", "sampler", "scheduler", "cfg-scale", "seed", "batch", "out", "engine",
+        "lora", "lora-dir",
     )
 
     fun run(args: List<String>, out: Appendable, err: Appendable, env: Map<String, String>): Int {
         val request = try {
-            parse(args).also { requireLoadableModel(it.model) }
+            parse(args, env).also { requireLoadableModel(it.model) }
         } catch (e: UsageException) {
             err.append(usageError(e.message ?: "bad arguments"))
             return Cli.EXIT_USAGE
@@ -111,6 +115,13 @@ internal object Txt2Img {
             )
             return Cli.EXIT_FAILURE
         }
+
+        // sdcpp only WARNs and carries on when a <lora:...> name does not
+        // resolve, so a typo would silently produce an image without the
+        // adapter. Check every weight here instead: the engine is never
+        // started for a LoRA request we cannot honour.
+        val lora = prepareLoras(request, err) ?: return Cli.EXIT_FAILURE
+
         val engine = File(request.engine ?: env[ENV_ENGINE] ?: DEFAULT_ENGINE)
         if (!engine.isFile) {
             err.append(
@@ -146,16 +157,83 @@ internal object Txt2Img {
             val target = if (index == 1) outFile else numbered(outFile, index)
             out.append("[${index}/${request.batch}] seed=$seed -> ${target.path}\n")
             (out as? Flushable)?.flush()
-            val failureCode = generate(engine, request, target, seed, out, err)
+            val failureCode = generate(engine, request, lora, target, seed, out, err)
             if (failureCode != Cli.EXIT_OK) return failureCode
         }
         return Cli.EXIT_OK
+    }
+
+    /**
+     * The LoRA request after checking it against the weights on disk.
+     *
+     * [enginePrompt] carries the resolved `<lora:file:multiplier>` tags that
+     * the pinned sdcpp CLI understands; [applied] is the same list in the
+     * A1111 `file@multiplier` spelling used by the copied Android helper, for
+     * the PNG's parameters. [dir] is null when no LoRA was requested, so a
+     * plain run's engine command is byte-for-byte what it was before.
+     */
+    private class LoraPlan(
+        val enginePrompt: String,
+        val applied: List<LoraSpec.Entry>,
+        val dir: String?,
+    )
+
+    /**
+     * Resolve `--lora` entries and prompt-embedded tags against the LoRA
+     * directory, then hand the engine exactly one tag per file. A prompt tag
+     * wins over `--lora` for the same file, as it does on Android.
+     *
+     * Returns null after writing the reason to [err] -- a missing weight is a
+     * failed request, not a usage error, because the command line itself was
+     * well formed.
+     */
+    private fun prepareLoras(request: Request, err: Appendable): LoraPlan? {
+        val split = PromptLoras.extract(request.prompt)
+        if (request.loraEntries.isEmpty() && split.tags.isEmpty()) {
+            return LoraPlan(request.prompt, emptyList(), null)
+        }
+        val dir = File(request.loraDir)
+        if (!dir.isDirectory) {
+            err.append(
+                failure(
+                    "LoRA directory '${dir.path}' does not exist or is not a directory; " +
+                        "pass --lora-dir <path> pointing at the folder with the .safetensors weights",
+                ),
+            )
+            return null
+        }
+        val installed = dir.listFiles()?.filter { it.isFile && !it.isHidden }?.map { it.name } ?: emptyList()
+
+        val fromPrompt = mutableListOf<LoraSpec.Entry>()
+        for (tag in split.tags) {
+            val file = PromptLoras.resolve(tag.name, installed)
+            if (file == null) {
+                err.append(failure("LoRA '${tag.name}' in --prompt was not found in '${dir.path}'; nothing was generated"))
+                return null
+            }
+            fromPrompt += LoraSpec.Entry(file, tag.strength)
+        }
+        // The same tokeniser as the mobile picker: one tag per file, prompt wins.
+        val merged = LoraSpec.parse(PromptLoras.merge(LoraSpec.format(request.loraEntries), fromPrompt))
+        val applied = mutableListOf<LoraSpec.Entry>()
+        for (entry in merged) {
+            val file = PromptLoras.resolve(entry.name, installed)
+            if (file == null) {
+                err.append(failure("LoRA weight '${entry.name}' was not found in '${dir.path}'; pass --lora-dir <path> or check the name"))
+                return null
+            }
+            applied += LoraSpec.Entry(file, entry.strength)
+        }
+        val tags = applied.joinToString(" ") { "<lora:${it.name}:${LoraSpec.number(it.strength)}>" }
+        val enginePrompt = if (split.text.isEmpty()) tags else "${split.text} $tags"
+        return LoraPlan(enginePrompt, applied, dir.path)
     }
 
     /** One engine run, then the checks that make its exit code mean something. */
     private fun generate(
         engine: File,
         request: Request,
+        lora: LoraPlan,
         target: File,
         seed: Long,
         out: Appendable,
@@ -166,7 +244,7 @@ internal object Txt2Img {
                 engine,
                 listOf(
                     "-m", request.model,
-                    "-p", request.prompt,
+                    "-p", lora.enginePrompt,
                     "-n", request.negativePrompt,
                     "-W", request.width.toString(),
                     "-H", request.height.toString(),
@@ -175,8 +253,8 @@ internal object Txt2Img {
                     "--sampling-method", request.sampler,
                     "--scheduler", request.scheduler,
                     "--cfg-scale", cfgText(request.cfgScale),
-                    "-o", target.path,
-                ),
+                ) + (lora.dir?.let { listOf("--lora-model-dir", it) } ?: emptyList()) +
+                    listOf("-o", target.path),
                 out,
             )
         } catch (e: IOException) {
@@ -209,7 +287,7 @@ internal object Txt2Img {
 
         // The parameters chunk is written by us, so it is verified by us too: a
         // chunk with a bad CRC32 would turn a good image into an unopenable one.
-        if (!Png.addParameters(target, parameters(request, seed))) {
+        if (!Png.addParameters(target, parameters(request, seed, lora.applied))) {
             err.append(failure("'${target.path}' is not a complete PNG; its parameters could not be recorded"))
             return Cli.EXIT_FAILURE
         }
@@ -230,7 +308,7 @@ internal object Txt2Img {
      * writes ([Png.addParameters]), and the engine's named the checkpoint. A
      * PNG that does not say which weights made it cannot be reproduced.
      */
-    private fun parameters(request: Request, seed: Long): String = buildString {
+    private fun parameters(request: Request, seed: Long, applied: List<LoraSpec.Entry>): String = buildString {
         append(request.prompt)
         append('\n')
         if (request.negativePrompt.isNotEmpty()) {
@@ -243,6 +321,9 @@ internal object Txt2Img {
         append(", Seed: ").append(seed)
         append(", Size: ").append(request.width).append('x').append(request.height)
         append(", Model: ").append(File(request.model).name)
+        if (applied.isNotEmpty()) {
+            append(", Lora: ").append(LoraSpec.format(applied))
+        }
     }
 
     /** `7.0` -> "7", `5.5` -> "5.5": the way every other SD tool writes a CFG scale. */
@@ -284,11 +365,13 @@ internal object Txt2Img {
         val batch: Int,
         val out: String,
         val engine: String?,
+        val loraEntries: List<LoraSpec.Entry>,
+        val loraDir: String,
     )
 
     private class UsageException(message: String) : Exception(message)
 
-    private fun parse(args: List<String>): Request {
+    private fun parse(args: List<String>, env: Map<String, String>): Request {
         val options = parseOptions(args)
         return Request(
             model = options.required("model"),
@@ -306,11 +389,47 @@ internal object Txt2Img {
             cfgScale = options.positiveDouble("cfg-scale", DEFAULT_CFG),
             batch = options.intIn("batch", DEFAULT_BATCH, BATCH_RANGE),
             engine = options["engine"],
+            loraEntries = options.loraEntries(),
+            loraDir = options["lora-dir"]?.takeIf { it.isNotBlank() }
+                ?: ModelLibrary.resolve(null, env).resolve("lora").toString(),
         )
+    }
+
+    /**
+     * `--lora` may be repeated or comma-separated. Both spellings go through
+     * the copied [LoraSpec] tokeniser, so `a@0.5,b` and two `--lora` flags mean
+     * the same thing. A multiplier that is not a number is caught here rather
+     * than quietly becoming 1.0 in the tokeniser.
+     */
+    private fun Map<String, String>.loraEntries(): List<LoraSpec.Entry> {
+        val raw = this["lora"]?.trim() ?: return emptyList()
+        if (raw.isEmpty()) throw UsageException("option '--lora' must not be empty")
+        for (piece in raw.split(',')) {
+            val entry = piece.trim()
+            val at = entry.lastIndexOf('@')
+            if (at < 0) continue
+            val text = entry.substring(at + 1).trim()
+            val number = text.toDoubleOrNull()
+                ?: throw UsageException("option '--lora' needs a numeric multiplier, got '$text'")
+            if (!number.isFinite()) {
+                throw UsageException("option '--lora' needs a finite multiplier, got '$text'")
+            }
+        }
+        return LoraSpec.parse(raw)
     }
 
     private fun parseOptions(args: List<String>): Map<String, String> {
         val options = LinkedHashMap<String, String>()
+        fun put(name: String, value: String) {
+            // Every other repeated flag is last-wins; --lora is a list, so
+            // joining with the same comma the mobile LoraSpec uses keeps one
+            // tokeniser for both spellings.
+            options[name] = if (name == "lora" && options.containsKey(name)) {
+                "${options[name]},$value"
+            } else {
+                value
+            }
+        }
         var i = 0
         while (i < args.size) {
             val token = args[i]
@@ -322,14 +441,14 @@ internal object Txt2Img {
             if (equals >= 0) {
                 val name = body.substring(0, equals)
                 requireKnown(name)
-                options[name] = body.substring(equals + 1)
+                put(name, body.substring(equals + 1))
                 i += 1
             } else {
                 requireKnown(body)
                 if (i + 1 >= args.size) {
                     throw UsageException("option '--$body' needs a value")
                 }
-                options[body] = args[i + 1]
+                put(body, args[i + 1])
                 i += 2
             }
         }
