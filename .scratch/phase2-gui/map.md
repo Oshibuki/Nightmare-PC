@@ -15,6 +15,7 @@ Status: charted
 - HITL 工单（`prototype` / `grilling`）必须由人与 agent 现场对话解决，agent 不得替人作答。本仓库无远端，research 分支只在本地保留、不开 PR。
 - 复制边界已由「NodeType 注册表与几何层的复制前置」锁定：桌面自写最小图模型/节点类型，复制几何/状态两层并就地换类型引用；移动版零改动，依据 ADR-0007。
 - 交互模式按「节点链编辑的交互形态」裁决：默认=C、高级=A，共享同一工作流；对话模式已由工单 09 决定后置，本轮只预留外部工具驱动接口，依据 ADR-0008。
+- 前沿已清空（9 张工单全部 resolved），可交接 `/to-spec` 写 Phase 2 GUI 规格。
 
 ## Decisions so far
 
@@ -26,6 +27,7 @@ Status: charted
 - [对话模式的边界与桌面落地方式](issues/09-chat-mode-boundary.md)：对话模式后置，本轮仅预留外部工具驱动接口；将来复制纯 JVM 的 LLM 核心、重写 Android 适配器，5 家 provider + 自定义 OpenAI 兼容端点，密钥只走注入与请求头；已立 ADR-0008。
 - [GUI 状态与 CLI 进程生命周期的边界](issues/03-gui-cli-state-boundary.md)：GUI 子进程驱动 CLI 并持有句柄，CLI 无状态；单运行、可取消、关窗清进程；仅成功产物入结果面板；已立 ADR-0009。
 - [进度与失败路径的 GUI 契约](issues/06-progress-contract.md)：解析 stdout 进度行为进度事件并转发引擎日志；四类失败统一为运行态失败，GUI 侧可配置超时（默认 10 分钟）；已立 ADR-0010。
+- [验收命令与三平台边界](issues/07-acceptance-platforms.md)：Linux 用 `desktop/verify-gui.sh` 一条命令闭环，真实权重冒烟可选；跨平台只要求本地编译通过、不建 CI；已立 ADR-0011。
 
 ## Not yet specified
 
