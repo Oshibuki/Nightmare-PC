@@ -133,6 +133,26 @@ jobs:
           restore-keys: |
             engine-cpu-${{ runner.os }}-35a3d48b23581d2be7c3ad95e92f34662bb5f305-
 
+      # A restored cache carries the absolute paths of the runner that created
+      # it. If those ever differ (the repo is renamed, so the workspace path
+      # changes), cmake refuses the tree with "The current CMakeCache.txt
+      # directory ... is different than the directory ... where it was created",
+      # and because a cache entry is immutable under its key, that failure
+      # repeats on every run until someone clears the cache by hand. Discarding
+      # the tree costs one reconfigure; the trap costs an afternoon.
+      - name: Discard a cached build tree configured under other paths
+        run: |
+          set -euo pipefail
+          cache=desktop/engine/build/CMakeCache.txt
+          [ -f "$cache" ] || exit 0
+          expected="$(pwd)/desktop/engine/sdcpp"
+          if ! grep -qxF "CMAKE_HOME_DIRECTORY:INTERNAL=$expected" "$cache"; then
+            echo "cached tree was configured for another source path; discarding it"
+            grep -F "CMAKE_HOME_DIRECTORY:INTERNAL=" "$cache" || true
+            echo "expected: CMAKE_HOME_DIRECTORY:INTERNAL=$expected"
+            rm -rf desktop/engine/build
+          fi
+
       # build.sh is the only supported entry point: it forces GGML_HEXAGON=OFF
       # at configure time (ADR-0005), prints the live SHAs next to the pins, and
       # fails if the artifact is missing. `set -euo pipefail` inside it means a
