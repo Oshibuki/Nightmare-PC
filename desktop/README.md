@@ -123,7 +123,7 @@ Linux `build` job and its failure-time upload of `desktop/*/build/reports/tests/
 the verification script is a local/agent entry point and CI was deliberately
 left unchanged.
 
-## Desktop GUI (Phase 2 skeleton)
+## Desktop GUI (Phase 2)
 
 `:gui` is an independent Compose Desktop application that stays a JVM project:
 it applies `org.jetbrains.kotlin.jvm`, `org.jetbrains.kotlin.plugin.compose`
@@ -132,6 +132,27 @@ Android plugin or target. Versions live in `gradle/libs.versions.toml`; the
 central repository list includes Google Maven only for Compose's generic
 `androidx.*` artifacts, while module scripts still may not declare repositories.
 
+The window opens in **default mode** with a built-in txt2img workflow loaded:
+a chain rail of node chips, a parameter drawer for the selected node, a result
+preview and a run log. **Advanced mode** replaces that shell with a node
+palette, a free-form wire canvas with zoom/pan, and a property panel. Both
+shells read and edit the same workflow and the same run state, so switching
+modes keeps parameters and an in-flight run (ADR-0008/0009). Workflows are
+`format=1` JSON, loaded by `:core`'s `WorkflowPersistence` and saved through its
+atomic replace. The external-tool command surface can also create, edit and run
+that one shared workflow without keeping a second copy.
+
+「运行」 starts the CLI as a child process (default timeout: ten minutes,
+editable in the shell). The GUI owns the process handle, so cancel and window
+close end it. Raw CLI stdout/stderr lines go into one log panel while
+`[i/N] seed=... -> ...` lines are additionally parsed into per-image progress
+events. Only PNGs still present after a clean exit reach the results; failure,
+cancellation and timeout settle into a readable error with the exit code and
+first reason in the shell and full detail in the log. `verify-gui.sh` (see
+[Phase 2 acceptance](#phase-2-acceptance-one-command-linux)) is the one-command
+acceptance script covering GUI compile, full build/test, fake CLI E2E, workflow
+persistence and an optional real SD1.5 smoke, each under a hard timeout.
+
 With `JAVA_HOME` exported as above and the working directory `desktop/`:
 
 ```bash
@@ -139,19 +160,23 @@ timeout 900 ./gradlew --no-daemon :gui:classes 2>&1 | tee /tmp/gui-classes.log
 timeout 300 xvfb-run -a ./gradlew --no-daemon :gui:run 2>&1 | tee /tmp/gui-run.log
 ```
 
-The entry point is `com.abrah.nightmare.desktop.gui.MainKt`; `:gui:run` opens an
-empty window titled `Nightmare Desktop`. Both commands are bounded and keep a
-log on failure. Drop `xvfb-run -a` when a display is already available; on a
-headless machine without Xvfb, startup cannot be verified here.
+The entry point is `com.abrah.nightmare.desktop.gui.MainKt`; `:gui:run` opens
+`Nightmare Desktop` in default mode with the built-in workflow ready to run.
+Both commands are bounded and keep a log on failure. Drop `xvfb-run -a` when a
+display is already available; on a headless machine without Xvfb, startup
+cannot be verified here.
 
 ### Locating the CLI executable
 
-The GUI will drive the CLI as a child process, not call it in-process. Build the
-runnable script with `./gradlew --no-daemon :cli:installDist`; the executable is
-`cli/build/install/nightmare-desktop/bin/nightmare-desktop` (absolute path:
-`<desktop>/cli/build/install/nightmare-desktop/bin/nightmare-desktop`). This
-skeleton does not launch it yet. Do not confuse it with `--engine` /
-`NIGHTMARE_SD_BIN`, which locate the C++ inference binary instead.
+The GUI drives the CLI as a child process, not in-process: it runs `txt2img`
+using `NIGHTMARE_GUI_CLI` when set, otherwise `nightmare-desktop` on `PATH`.
+Build the runnable script with `./gradlew --no-daemon :cli:installDist`; the
+executable is `cli/build/install/nightmare-desktop/bin/nightmare-desktop`
+(absolute path:
+`<desktop>/cli/build/install/nightmare-desktop/bin/nightmare-desktop`). Point
+`NIGHTMARE_GUI_CLI` at that absolute path when it is not on `PATH`. Do not
+confuse it with `--engine` / `NIGHTMARE_SD_BIN`, which locate the C++ inference
+binary instead.
 
 ## Smoke test: one command to a PNG
 
@@ -361,7 +386,7 @@ string users see.
 | --- | --- |
 | `cli/` | `:cli` — headless entry point, argument handling, exit codes |
 | `core/` | `:core` — platform-independent logic copied from the Android app |
-| `gui/` | `:gui` — Compose Desktop shell, currently an empty window |
+| `gui/` | `:gui` — Compose Desktop shell with default/advanced modes, CLI subprocess runner, progress/log/results and workflow state |
 | `engine/` | vendored C++ inference engine, built outside Gradle |
 | `docs/` | desktop-only documentation |
 
