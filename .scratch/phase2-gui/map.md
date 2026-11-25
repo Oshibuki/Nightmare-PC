@@ -25,6 +25,7 @@ Status: charted
 - [节点链编辑的交互形态](issues/02-node-chain-interaction.md)：默认模式用 C（链芯片 + 参数抽屉），高级模式用 A（自由画布），B 被否；三模式共享一份工作流与节点类型；对话模式另开工单 09。
 - [对话模式的边界与桌面落地方式](issues/09-chat-mode-boundary.md)：对话模式后置，本轮仅预留外部工具驱动接口；将来复制纯 JVM 的 LLM 核心、重写 Android 适配器，5 家 provider + 自定义 OpenAI 兼容端点，密钥只走注入与请求头；已立 ADR-0008。
 - [GUI 状态与 CLI 进程生命周期的边界](issues/03-gui-cli-state-boundary.md)：GUI 子进程驱动 CLI 并持有句柄，CLI 无状态；单运行、可取消、关窗清进程；仅成功产物入结果面板；已立 ADR-0009。
+- [进度与失败路径的 GUI 契约](issues/06-progress-contract.md)：解析 stdout 进度行为进度事件并转发引擎日志；四类失败统一为运行态失败，GUI 侧可配置超时（默认 10 分钟）；已立 ADR-0010。
 
 ## Not yet specified
 
