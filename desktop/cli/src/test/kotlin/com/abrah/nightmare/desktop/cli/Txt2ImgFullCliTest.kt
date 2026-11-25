@@ -7,6 +7,8 @@ import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.file.Files
 import javax.imageio.ImageIO
 
@@ -32,9 +34,21 @@ class Txt2ImgFullCliTest {
     fun setUp() {
         assumeTrue("/bin/sh is required by the fake engine", File("/bin/sh").exists())
         dir = Files.createTempDirectory("nm-cli-full-test").toFile()
-        model = File(dir, "model.safetensors").apply { writeText("not really a model") }
+        model = safetensors("model.safetensors")
         argvFile = File(dir, "argv.txt")
         outPng = File(dir, "out.png")
+    }
+
+    /** A real safetensors header: the CLI checks bytes before starting the engine. */
+    private fun safetensors(name: String): File {
+        val json = """{"w":{"dtype":"F16","shape":[2],"data_offsets":[0,4]}}"""
+        val header = json.toByteArray(Charsets.UTF_8)
+        val bytes = ByteBuffer.allocate(8 + header.size)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putLong(header.size.toLong())
+            .put(header)
+            .array()
+        return File(dir, name).apply { writeBytes(bytes) }
     }
 
     // ---- the command line ---------------------------------------------------

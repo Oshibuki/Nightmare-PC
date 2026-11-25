@@ -1,10 +1,12 @@
 package com.abrah.nightmare.desktop.cli
 
+import com.abrah.nightmare.desktop.core.ModelFile
 import com.abrah.nightmare.desktop.core.ProductIdentity
 import com.abrah.nightmare.desktop.core.SamplerWire
 import java.io.File
 import java.io.Flushable
 import java.io.IOException
+import java.nio.file.Paths
 import kotlin.random.Random
 
 /**
@@ -26,6 +28,10 @@ import kotlin.random.Random
  * - **The metadata.** The engine writes pixels; the CLI writes the A1111-style
  *   `parameters` chunk beside them, because a batch of PNGs with no record of
  *   the seed and sampler that made them cannot be reproduced.
+ *
+ * ⚠ `--model` is also checked against its own header before the engine starts
+ * (see [ModelFile]): a half-downloaded checkpoint otherwise costs minutes of
+ * model loading and ends in a crash or a noise image.
  */
 internal object Txt2Img {
 
@@ -70,7 +76,7 @@ internal object Txt2Img {
 
     fun run(args: List<String>, out: Appendable, err: Appendable, env: Map<String, String>): Int {
         val request = try {
-            parse(args)
+            parse(args).also { requireLoadableModel(it.model) }
         } catch (e: UsageException) {
             err.append(usageError(e.message ?: "bad arguments"))
             return Cli.EXIT_USAGE
@@ -81,6 +87,28 @@ internal object Txt2Img {
         val model = File(request.model)
         if (!model.isFile) {
             err.append(failure("model '${request.model}' does not exist or is not a file"))
+            return Cli.EXIT_FAILURE
+        }
+        if (!model.canRead()) {
+            err.append(failure("model '${request.model}' is not readable"))
+            return Cli.EXIT_FAILURE
+        }
+        // The name is a claim; the header is the evidence. Refuse a GGUF here:
+        // sd-cli's -m is a single-file checkpoint, so a DiT GGUF there renders noise.
+        val contents = try {
+            ModelFile.read(model.toPath())
+        } catch (e: IOException) {
+            err.append(failure("model '${request.model}' is not usable: ${e.message}"))
+            return Cli.EXIT_FAILURE
+        }
+        if (contents is ModelFile.Contents.Gguf) {
+            err.append(
+                failure(
+                    "model '${request.model}' is a GGUF diffusion model. Those are loaded with " +
+                        "--diffusion-model (plus --llm and --vae), which this build does not implement yet; " +
+                        "nothing was generated. Pass a single-file .safetensors checkpoint to --model.",
+                ),
+            )
             return Cli.EXIT_FAILURE
         }
         val engine = File(request.engine ?: env[ENV_ENGINE] ?: DEFAULT_ENGINE)
@@ -226,6 +254,19 @@ internal object Txt2Img {
         val name = outFile.name
         val stem = if (name.endsWith(".png", ignoreCase = true)) name.dropLast(4) else name
         return File(outFile.absoluteFile.parentFile, "$stem-$index.png")
+    }
+
+    /**
+     * A path whose extension is not a format this build reads is a mistake in
+     * the command line, not a broken file -- so it exits 2 without opening it.
+     */
+    private fun requireLoadableModel(path: String) {
+        if (ModelFile.formatOf(Paths.get(path)) == null) {
+            throw UsageException(
+                "--model '${File(path).name}' is not a model file this build reads " +
+                    "(supported: ${ModelFile.EXTENSIONS.joinToString(", ") { ".$it" }})",
+            )
+        }
     }
 
     /** Everything the engine call needs, after the command line has been checked. */

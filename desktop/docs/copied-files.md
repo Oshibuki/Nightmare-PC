@@ -51,6 +51,16 @@ The `GgufHeader` tests were copied unchanged apart from the provenance line: sam
 same class names, same assertions. Nothing was relaxed to make them compile —
 they compile because `GgufHeader` is genuinely platform-free.
 
+## Desktop-authored (not copied)
+
+| Desktop path (`desktop/core/src/…`) | Why it is not a copy |
+| --- | --- |
+| `main/kotlin/com/abrah/nightmare/desktop/core/ModelFile.kt` | New desktop code: judges `.safetensors`/`.gguf` by header bytes; reuses the copied `GgufHeader` instead of porting `SafetensorsGguf.kt` (blocked by `android.util.Half`/`org.json`). |
+| `main/kotlin/com/abrah/nightmare/desktop/core/ModelLibrary.kt` | New desktop code: directory scan with `--dir`/`NIGHTMARE_MODELS`/shared-cache precedence; Android `ModelCatalog.kt` is blocked by `Context` and is not copied. |
+
+These two files deliberately have no "Copied from" line: inventing one would
+lie about provenance.
+
 ## Skipped, and why
 
 Nothing below is "hard to port". Each one is blocked by a **single symbol that
