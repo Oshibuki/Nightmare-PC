@@ -4,7 +4,11 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] README 存在且包含补丁三类清单（可移植 / Hexagon 专属 / 待定性）与应用顺序约定
-- [ ] 应用脚本的防静默失败断言经 dry-run 验证
+- [x] README 存在且包含补丁三类清单（可移植 / Hexagon 专属 / 待定性）与应用顺序约定
+- [x] 应用脚本的防静默失败断言经 dry-run 验证
+
+## Comments
+
+- 2026-11-25：`backend-patches/README.md` 已恢复，按后缀路由与"应用前后 diff 相同即报错"的应用脚本就位（见 `desktop/engine/PATCHES.md`）；合并提交 `704a8cf`。

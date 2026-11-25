@@ -4,7 +4,11 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 档案文件存在且含三个精确版本号与来源说明
-- [ ] 历史 run 不可得时的回退值已记录并注明"非移动版同款构建"
+- [x] 档案文件存在且含三个精确版本号与来源说明
+- [x] 历史 run 不可得时的回退值已记录并注明"非移动版同款构建"
+
+## Comments
+
+- 2026-11-25：`desktop/engine/ENGINES.md` 固化 local-dream `18be9aa6`、sdcpp `35a3d48b`、ggml `f8758628`，含取得方式、CI 复核命令与覆盖 ref 的回退说明；合并提交 `55131c9`。

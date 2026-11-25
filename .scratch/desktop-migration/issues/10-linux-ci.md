@@ -4,6 +4,10 @@
 
 **Blocked by:** 04, 05
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] workflow 语法有效（dry-run/act 验证），触发路径与命令正确
+- [x] workflow 语法有效（dry-run/act 验证），触发路径与命令正确
+
+## Comments
+
+- 2026-11-25：workflow 落在 `.github/workflows/desktop.yml`，`desktop/` 变更触发 Kotlin 层构建与全部测试；远端接入前本地 dry-run 验证；合并提交 `3a208b5`。

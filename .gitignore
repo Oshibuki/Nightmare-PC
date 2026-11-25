@@ -120,6 +120,10 @@ docs/DEVICES.md
 !/backend-patches/README.md
 !/desktop/**/*.md
 
+# Agent worktrees live INSIDE the repo (`.codebuddy/worktrees/`), so they must
+# never be picked up by `git add -A` in the main worktree.
+/.codebuddy/worktrees/
+
 # ── Nightmare Desktop (ADR-0003) ────────────────────────────────────────────
 # Model weights are downloaded, never committed; the search order is documented
 # in desktop/AGENTS.md. Build output is already covered by `build/`/`.gradle/`.

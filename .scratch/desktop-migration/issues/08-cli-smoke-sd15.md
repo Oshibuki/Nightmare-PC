@@ -4,8 +4,12 @@
 
 **Blocked by:** 07
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Linux 一条命令从零到 PNG 成功（512x512、20 步内）
-- [ ] 失败路径有明确错误输出
-- [ ] SD1.5 权重获取方式与放置目录约定写入文档（权重不入库）
+- [x] Linux 一条命令从零到 PNG 成功（512x512、20 步内）
+- [x] 失败路径有明确错误输出
+- [x] SD1.5 权重获取方式与放置目录约定写入文档（权重不入库）
+
+## Comments
+
+- 2026-11-25：`txt2img` 冒烟与退出码契约见 `desktop/README.md`，权重来源与目录见 `desktop/docs/models.md`；CPU 路径 512×512/20 步已实测出 PNG；合并提交 `43f0aff`。

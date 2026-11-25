@@ -4,8 +4,12 @@
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 复制代码的测试在 `desktop/` 全绿
-- [ ] 来源追踪文档与实际文件一一对应
-- [ ] Android 依赖过深的文件已跳过并记录原因
+- [x] 复制代码的测试在 `desktop/` 全绿
+- [x] 来源追踪文档与实际文件一一对应
+- [x] Android 依赖过深的文件已跳过并记录原因
+
+## Comments
+
+- 2026-11-25：首个纵向切片落地为 `GgufHeader.kt` + 2 个 JVM 测试，来源与跳过原因登记在 `desktop/docs/copied-files.md`；合并提交 `073142c`。其余候选（模型目录、采样器、执行调度、节点图几何）被 Android 符号阻塞，已转给 11/13/14/15/17。

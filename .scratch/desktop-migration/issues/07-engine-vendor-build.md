@@ -4,8 +4,12 @@
 
 **Blocked by:** 02, 04
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Linux 本地构建成功，产物路径与最小依赖（编译器/Vulkan SDK 版本）已记录
-- [ ] 构建配置中无 Hexagon/QNN 目标
-- [ ] 构建脚本预留"补丁应用 + 哈希校验"钩子
+- [x] Linux 本地构建成功，产物路径与最小依赖（编译器/Vulkan SDK 版本）已记录
+- [x] 构建配置中无 Hexagon/QNN 目标
+- [x] 构建脚本预留"补丁应用 + 哈希校验"钩子
+
+## Comments
+
+- 2026-11-25：引擎源码 vendor 于 `desktop/engine/sdcpp`，`build.sh` 默认 clean baseline、`--patch` 默认关闭，构建记录与依赖见 `ENGINES.md`/`README.md`；合并提交 `ac11533`。

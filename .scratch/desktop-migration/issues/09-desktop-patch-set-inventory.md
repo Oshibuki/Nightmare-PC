@@ -4,7 +4,11 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 清单覆盖全部补丁且每个都有归属（桌面用 / 排除 / 待定性）
-- [ ] 桌面补丁的应用顺序建议已给出
+- [x] 清单覆盖全部补丁且每个都有归属（桌面用 / 排除 / 待定性）
+- [x] 桌面补丁的应用顺序建议已给出
+
+## Comments
+
+- 2026-11-25：`desktop/engine/PATCHES.md` 给出逐补丁归属与应用顺序，`PatchInventoryTest` 锁定"一文件一行、一行一判定、无幽灵行"；合并提交 `2abaf5c`。
