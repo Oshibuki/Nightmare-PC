@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -46,10 +47,17 @@ fun DefaultModeScreen(state: DefaultModeState = remember { DefaultModeState() })
     var revision by remember { mutableIntStateOf(0) }
     DisposableEffect(state) {
         val unsubscribe = state.addChangeListener { revision++ }
-        onDispose(unsubscribe)
+        onDispose {
+            unsubscribe()
+            // Window close must not leave a background CLI behind (ADR-0009).
+            WorkflowRunner.cancelActiveProcess(state.runHandle())
+        }
     }
     val snapshot = remember(state, revision) { state.snapshot() }
     val runState = remember(state, revision) { state.runSnapshot() }
+    var timeoutMinutes by remember {
+        mutableStateOf((GuiRunSettings.timeoutMillis / 60_000L).toString())
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().background(Color(0xFFF5F7FB)),
@@ -62,7 +70,19 @@ fun DefaultModeScreen(state: DefaultModeState = remember { DefaultModeState() })
                 // run() blocks on the child process; keep the shell responsive.
                 Thread { state.triggerRun() }.apply { isDaemon = true }.start()
             },
+            onCancel = { WorkflowRunner.cancelActiveProcess(state.runHandle()) },
+            timeoutMinutes = timeoutMinutes,
+            onTimeoutChange = { text ->
+                timeoutMinutes = text
+                text.toLongOrNull()?.takeIf { it > 0 }?.let {
+                    GuiRunSettings.timeoutMillis = it * 60_000L
+                }
+            },
         )
+
+        if (runState.status == RunStatus.FAILURE || runState.status == RunStatus.CANCELLED) {
+            RunStatusBanner(runState, modifier = Modifier.fillMaxWidth())
+        }
 
         Row(modifier = Modifier.fillMaxSize().weight(1f)) {
             ResultPreview(
@@ -88,6 +108,9 @@ private fun ChainRail(
     runState: RunSnapshot,
     onSelect: (String) -> Unit,
     onRun: () -> Unit,
+    onCancel: () -> Unit,
+    timeoutMinutes: String,
+    onTimeoutChange: (String) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -135,9 +158,41 @@ private fun ChainRail(
             fontSize = 12.sp,
             modifier = Modifier.padding(end = 12.dp),
         )
+        OutlinedTextField(
+            value = timeoutMinutes,
+            onValueChange = onTimeoutChange,
+            label = { Text("超时(分)") },
+            modifier = Modifier.width(104.dp),
+            singleLine = true,
+        )
+        Spacer(modifier = Modifier.width(8.dp))
         Button(onClick = onRun, enabled = !running) {
             Text(if (running) "运行中" else "运行")
         }
+        if (running) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = onCancel,
+                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFFB23B3B)),
+            ) {
+                Text("取消")
+            }
+        }
+    }
+}
+
+/** The single readable error line: exit code + first reason; details stay in the log. */
+@Composable
+private fun RunStatusBanner(runState: RunSnapshot, modifier: Modifier = Modifier) {
+    val cancelled = runState.status == RunStatus.CANCELLED
+    val message = runState.error ?: if (cancelled) "运行已取消" else "运行失败（详见日志）"
+    Row(
+        modifier = modifier
+            .background(if (cancelled) Color(0xFF6B7280) else Color(0xFFFDECEA))
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(message, color = if (cancelled) Color.White else Color(0xFF9B2C2C), fontSize = 12.sp)
     }
 }
 
@@ -174,10 +229,11 @@ private fun ResultPreview(
                 Text(preview.detail, color = Color(0xFFCFD8EA))
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    if (status == RunStatus.RUNNING) {
-                        "引擎正在生成，逐张进度见下方日志面板。"
-                    } else {
-                        "内置工作流已加载；点击「运行」生成 PNG。"
+                    when (status) {
+                        RunStatus.RUNNING -> "引擎正在生成，逐张进度见下方日志面板。"
+                        RunStatus.FAILURE -> "本次运行失败，临时产物已清理；可修改参数后重跑。"
+                        RunStatus.CANCELLED -> "本次运行已取消，临时产物已清理；可修改参数后重跑。"
+                        else -> "内置工作流已加载；点击「运行」生成 PNG。"
                     },
                     color = Color(0xFF9FADC7),
                     fontSize = 12.sp,
