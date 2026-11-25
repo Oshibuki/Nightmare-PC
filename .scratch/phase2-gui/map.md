@@ -13,13 +13,14 @@ Status: charted
 - 每会话先只读本 map，再从 `issues/` 取第一张「未阻塞且未认领」的工单；动手前把 `Status:` 改为 `claimed`，解决后改为 `resolved`、把结论写进该工单的 `## Answer`，并在下面 Decisions so far 追加一行结论指针。
 - Charting 轮已锁定、不再开新工单重问的前提：①目的地是规格而非实现；②最小交付是端到端纵向切片；③Linux 可运行、Windows/macOS 仅编译；④GUI 到生成走 CLI 进程接缝，不新开 A1111 HTTP 或 Kotlin 直接调用接缝；⑤首批只复制 `CanvasModel`/`CanvasState` 与三份 JVM 测试，执行层 `Graph`/`Executor` 不复制，工作流沿用 Android 的「工作流（Workflow）」概念但桌面侧写最小导入导出；⑥进度消费 CLI stdout 的逐行输出；⑦测试沿用 Gradle 测试源集的假 CLI runner + 已有 SD1.5 CLI 冒烟，不引入 Compose UI 测试框架。
 - HITL 工单（`prototype` / `grilling`）必须由人与 agent 现场对话解决，agent 不得替人作答。本仓库无远端，research 分支只在本地保留、不开 PR。
-- 新发现的前置：`Graph.kt`/`CanvasModel.kt`/`CanvasState.kt` 都依赖 `Executor.kt` 的 `NodeType`/`NODE_TYPES`（`desktop/docs/copied-files.md:102-104`），而 spec 排除移动版改动；已开「NodeType 注册表与几何层的复制前置」工单，它解锁「节点链编辑的交互形态」。
+- 复制边界已由「NodeType 注册表与几何层的复制前置」锁定：桌面自写最小图模型/节点类型，复制几何/状态两层并就地换类型引用；移动版零改动，依据 ADR-0007。
 
 ## Decisions so far
 
 - [确认 Compose Multiplatform 的落地方式](issues/01-compose-build-setup.md)：保持 JVM 插件，新增 `:gui` 模块，Kotlin 2.4.21 + Compose compiler 2.4.21 + CMP 1.12.2，并在依赖仓库中加 `google()`；`cd desktop && ./gradlew :gui:run` 验证（结论文档在 research 分支提交 `beedd0e`）。
 - [核实工作流 JSON 的可复制性](issues/04-workflow-json-reuse.md)：两个移动版文件都不能直接复制（传递依赖拖进 NPU/视频资产与 `R`）；桌面自写最小 JSON 读写，并借用 `format`/`nodes`/`requires`/`view` 线格式形状，安全 id 与原子保存模式照搬思路。
 - [工作流的保存与载入范围](issues/05-persistence-scope.md)：最小闭环含新建/载入/保存，严格 `format=1`；显式保存，三类失败统一界面内错误条且工作流不变，用临时目录 + 合成坏文件做端到端断言；术语统一为「工作流/内置工作流」。
+- [NodeType 注册表与几何层的复制前置](issues/08-nodetype-registry-prerequisite.md)：桌面自写最小图模型与节点类型（只含表现成员、三类 txt2img 节点），复制几何/状态两层并就地换类型引用；移动版零改动，已立 ADR-0007。
 
 ## Not yet specified
 
