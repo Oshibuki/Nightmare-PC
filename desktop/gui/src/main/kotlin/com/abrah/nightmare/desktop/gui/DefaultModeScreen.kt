@@ -43,15 +43,16 @@ import androidx.compose.ui.unit.sp
  * renders only the shared workflow/run state; no second chain is kept.
  */
 @Composable
-fun DefaultModeScreen(state: DefaultModeState = remember { DefaultModeState() }) {
+fun DefaultModeScreen(
+    state: DefaultModeState = remember { DefaultModeState() },
+    onSwitchToAdvanced: () -> Unit = {},
+) {
     var revision by remember { mutableIntStateOf(0) }
     DisposableEffect(state) {
         val unsubscribe = state.addChangeListener { revision++ }
-        onDispose {
-            unsubscribe()
-            // Window close must not leave a background CLI behind (ADR-0009).
-            WorkflowRunner.cancelActiveProcess(state.runHandle())
-        }
+        // A mode switch disposes this effect; the window-level effect in Main
+        // owns CLI cleanup so the same run can survive either shell (ADR-0009).
+        onDispose { unsubscribe() }
     }
     val snapshot = remember(state, revision) { state.snapshot() }
     val runState = remember(state, revision) { state.runSnapshot() }
@@ -71,6 +72,7 @@ fun DefaultModeScreen(state: DefaultModeState = remember { DefaultModeState() })
                 Thread { state.triggerRun() }.apply { isDaemon = true }.start()
             },
             onCancel = { WorkflowRunner.cancelActiveProcess(state.runHandle()) },
+            onSwitchToAdvanced = onSwitchToAdvanced,
             timeoutMinutes = timeoutMinutes,
             onTimeoutChange = { text ->
                 timeoutMinutes = text
@@ -109,6 +111,7 @@ private fun ChainRail(
     onSelect: (String) -> Unit,
     onRun: () -> Unit,
     onCancel: () -> Unit,
+    onSwitchToAdvanced: () -> Unit,
     timeoutMinutes: String,
     onTimeoutChange: (String) -> Unit,
 ) {
@@ -120,6 +123,8 @@ private fun ChainRail(
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Button(onClick = onSwitchToAdvanced) { Text("高级模式") }
+        Spacer(modifier = Modifier.width(12.dp))
         snapshot.chips.forEachIndexed { index, chip ->
             if (index > 0) {
                 Text("→", color = Color(0xFF94A0B5), modifier = Modifier.padding(horizontal = 8.dp))
