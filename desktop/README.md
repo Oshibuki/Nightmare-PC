@@ -93,11 +93,67 @@ understood but could not be completed (missing model, engine failure, an output
 that is not the PNG it claims to be), `2` the command line itself was wrong
 (message on stderr, nothing on stdout). `--help` documents all three.
 
-`txt2img` takes `--model`, `--prompt` and `--out` (all required) plus
-`--negative-prompt`, `--width`/`--height` (512), `--steps` (20), `--seed` (42)
-and `--engine`. The engine is resolved from `--engine`, then `NIGHTMARE_SD_BIN`,
-then `desktop/engine/build/bin/sd-cli`; it runs as a child process with its
-output forwarded, so a crash cannot take the CLI down with it.
+`txt2img` takes `--model`, `--prompt` and `--out` (all required) plus:
+
+| Option | Default | Accepted |
+| --- | --- | --- |
+| `--negative-prompt` | empty | any text |
+| `--width` / `--height` | 512 | positive, a multiple of 8 |
+| `--steps` | 20 | 1–150 |
+| `--sampler` | `euler` | `euler`, `euler_a`, `heun`, `dpm++2m`, `dpm++2m_sde`, `er_sde`, `res_multistep`, `ipndm`, `lcm` |
+| `--scheduler` | `discrete` | `discrete`, `karras`, `exponential`, `sgm_uniform`, `bong_tangent`, `simple`, `beta` |
+| `--cfg-scale` | 7 | any number > 0 |
+| `--seed` | 42 | any integer; `-1` draws one and reports it |
+| `--batch` | 1 | 1–16 |
+| `--engine` | `$NIGHTMARE_SD_BIN`, then `desktop/engine/build/bin/sd-cli` | a path |
+
+The engine is resolved from `--engine`, then `NIGHTMARE_SD_BIN`, then
+`desktop/engine/build/bin/sd-cli`; it runs as a child process with its output
+forwarded, so a crash cannot take the CLI down with it.
+
+⚠ **The two vocabularies are not the same.** The sampler names above are the
+**engine's** (`sample_method_to_str[]` in `engine/sdcpp/src/stable-diffusion.cpp`),
+not the mobile app's backend ids — `dpm` and `dpm_sde` are the QNN backend's
+spelling and are rejected with exit `2`, as is `lcm_karras` (the app's suffix
+form; the engine takes the schedule in its own flag). The accepted values come
+from `Samplers.kt`, the copied mobile table, narrowed by
+`SamplerWire.kt` — the CLI has no list of its own, so a name it offers is a name
+the engine knows.
+
+### Batches
+
+`--batch 3` runs the engine three times, one image at a time, with the seed
+incrementing from `--seed`. The first image is written exactly where `--out`
+points; the rest go beside it as `<stem>-<i>.png` (`out.png` → `out-2.png`,
+`out-3.png`). One `[i/N] seed=<seed> -> <path>` line per image goes to stdout
+before the engine's own output, so a long batch says where it is.
+
+### The `parameters` chunk
+
+Every PNG carries an A1111-style `parameters` chunk — `tEXt` for Latin-1 text,
+`iTXt` when the prompt is not (a Japanese or Chinese prompt would otherwise be
+mangled to `?`), always with the keyword `parameters`, always written **before
+IEND** with a correct CRC32:
+
+```
+a red fox in an autumn forest, photograph
+Negative prompt: blurry, low quality
+Steps: 8, Sampler: Euler A, Schedule type: Karras, CFG scale: 5.5, Seed: 42, Size: 640x448, Model: v1-5-pruned-emaonly.safetensors
+```
+
+The names in it are the human ones (`Euler A`, not `euler_a`) because this
+string is what a person reads out of an old image; the exact flags are in your
+shell history.
+
+⚠ **The engine writes one of these too** (`Sampler: euler_a karras`,
+`CFG scale: 5.500000`, plus an `SDCPP: {...}` JSON blob), so the CLI **replaces**
+that chunk rather than adding a second: two chunks under one keyword is
+ambiguous, and readers disagree about which wins (PIL keeps the last, a walker
+that stops at the first match keeps the first). What is lost in the swap is the
+`SDCPP` JSON; what is kept is every field above plus `Model:`, so the image still
+names the weights that made it. If the engine writes a file with no IEND, the
+run fails with exit `1` rather than adding a chunk to a file that was already
+broken.
 
 ## Versions
 

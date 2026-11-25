@@ -6,7 +6,6 @@ import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
-import java.nio.ByteBuffer
 import java.nio.file.Files
 
 /**
@@ -61,16 +60,14 @@ class Txt2ImgTest {
         return script
     }
 
-    /** Minimal PNG header: signature, IHDR chunk length, "IHDR", width, height. */
-    private fun stubPng(width: Int, height: Int, name: String = "stub.png"): File {
-        val header = ByteBuffer.allocate(24)
-        header.put(byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A))
-        header.putInt(13)
-        header.put("IHDR".toByteArray(Charsets.US_ASCII))
-        header.putInt(width)
-        header.putInt(height)
-        return File(dir, name).apply { writeBytes(header.array() + ByteArray(9)) }
-    }
+    /**
+     * A complete minimal PNG at the requested size. ⚠ It has to be complete --
+     * the CLI inserts the `parameters` chunk before IEND, so a header-only stub
+     * would be rejected as an unfinished file, which is the behaviour
+     * [TestPng] exists to keep honest.
+     */
+    private fun stubPng(width: Int, height: Int, name: String = "stub.png"): File =
+        TestPng.file(dir, width, height, name)
 
     private fun txt2img(engine: File, vararg extra: String): Int = run(
         "txt2img",
@@ -294,6 +291,9 @@ class Txt2ImgTest {
                 "-H", "512",
                 "--steps", "20",
                 "--seed", "42",
+                "--sampling-method", "euler",
+                "--scheduler", "discrete",
+                "--cfg-scale", "7",
                 "-o", outPng.absolutePath,
             ),
             argvFile.readLines(),
@@ -345,6 +345,9 @@ class Txt2ImgTest {
                 "-H", "512",
                 "--steps", "20",
                 "--seed", "42",
+                "--sampling-method", "euler",
+                "--scheduler", "discrete",
+                "--cfg-scale", "7",
                 "-o", outPng.absolutePath,
             ),
             argvFile.readLines(),

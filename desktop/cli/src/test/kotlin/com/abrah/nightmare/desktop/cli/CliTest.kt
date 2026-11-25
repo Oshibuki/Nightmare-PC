@@ -46,6 +46,34 @@ class CliTest {
         assertTrue("help should point at the model docs: $text", text.contains("desktop/docs/models.md"))
     }
 
+    /**
+     * Every knob a script can turn is documented, with its bounds and its
+     * default -- a flag that only exists in the parser is a flag nobody finds.
+     */
+    @Test
+    fun `help documents every txt2img parameter with its bounds`() {
+        assertEquals(0, run("--help"))
+        val text = out.toString()
+        for (option in listOf(
+            "--negative-prompt", "--width", "--height", "--steps",
+            "--sampler", "--scheduler", "--cfg-scale", "--seed", "--batch", "--engine",
+        )) {
+            assertTrue("help should document $option: $text", text.contains(option))
+        }
+        assertTrue("help should state the 1-150 step bound: $text", text.contains("1-150"))
+        assertTrue("help should state the 1-16 batch bound: $text", text.contains("1-16"))
+        assertTrue("help should state the multiple-of-8 size rule: $text", text.contains("multiple of 8"))
+        // The sampler/scheduler values come from the copied table, so the help
+        // text is the table -- a list written twice would drift.
+        assertTrue("help should list the default sampler: $text", text.contains("default: euler"))
+        assertTrue("help should list a sampler value: $text", text.contains("euler_a"))
+        assertTrue("help should list the default scheduler: $text", text.contains("default: discrete"))
+        assertTrue("help should list a scheduler value: $text", text.contains("sgm_uniform"))
+        assertTrue("help should explain the batch naming: $text", text.contains("<stem>-<i>.png"))
+        assertTrue("help should explain the batch seed: $text", text.contains("seed incrementing"))
+        assertTrue("help should explain the metadata chunk: $text", text.contains("parameters"))
+    }
+
     @Test
     fun `unknown option fails and names the offending argument`() {
         assertEquals(2, run("--frobnicate"))
