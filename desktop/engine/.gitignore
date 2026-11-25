@@ -1,0 +1,9 @@
+# Engine build trees. `build/` is already covered by the root .gitignore, but
+# `build-vulkan/` is not, and it is the one an agent is most likely to create by
+# accident (build.sh --vulkan). Both are cmake output: nothing here is source.
+/build/
+/build-vulkan/
+
+# The submodule checkout itself is a gitlink, not content; if a future edit ever
+# turns it into a plain directory, refuse to stage several hundred MB of C++.
+/sdcpp/
