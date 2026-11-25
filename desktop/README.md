@@ -191,6 +191,36 @@ names the weights that made it. If the engine writes a file with no IEND, the
 run fails with exit `1` rather than adding a chunk to a file that was already
 broken.
 
+### Local HTTP API (opt-in)
+
+The HTTP service is **off** unless you explicitly start it:
+
+```bash
+./cli/build/install/nightmare-desktop/bin/nightmare-desktop \
+  serve --model "$HOME/.cache/nightmare-desktop/models/sd15/v1-5-pruned-emaonly.safetensors" \
+  --port 1234
+```
+
+`serve` runs the engine's `sd-server` in the foreground and always passes
+`--listen-ip 127.0.0.1`; the CLI has no host flag, so a typo cannot expose an
+unauthenticated generation endpoint to the LAN. `--port` defaults to `1234`
+(1–65535). The binary is resolved from `--engine`, then
+`NIGHTMARE_SD_SERVER_BIN`, then `desktop/engine/build/bin/sd-server`;
+`engine/build.sh` already builds it alongside `sd-cli`. The server's stdout and
+stderr are forwarded, and a non-zero engine exit becomes a non-zero CLI exit.
+
+The engine's own A1111-style routes are then available on the loopback port:
+
+```bash
+curl --max-time 300 -sS -H 'Content-Type: application/json' \
+  -d '{"prompt":"a red fox","steps":4,"width":64,"height":64}' \
+  http://127.0.0.1:1234/sdapi/v1/txt2img
+```
+
+`images` in the response is an array of base64-encoded PNGs. This exposes the
+vendored engine as-is: an Android API layer and certification against a real
+A1111 client are separate tickets, not claims made by this command.
+
 ## Versions
 
 Every version lives in `gradle/libs.versions.toml` and nowhere else. The product
