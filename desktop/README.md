@@ -218,8 +218,9 @@ curl --max-time 300 -sS -H 'Content-Type: application/json' \
 ```
 
 `images` in the response is an array of base64-encoded PNGs. This exposes the
-vendored engine as-is: an Android API layer and certification against a real
-A1111 client are separate tickets, not claims made by this command.
+vendored engine as-is. The result of testing that surface with an unmodified
+A1111 client, including the endpoints this engine does not implement, is in
+[`docs/a1111-client-compat.md`](docs/a1111-client-compat.md).
 
 ## Versions
 
