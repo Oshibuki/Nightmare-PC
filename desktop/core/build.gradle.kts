@@ -38,5 +38,10 @@ dependencies {
 
 tasks.test {
     useJUnit()
+    // PatchInventoryTest reads files from outside the Gradle build: the patch
+    // library at `backend-patches/` and the inventory it guards. `desktop/` is the
+    // Gradle root, so the repository root is one level above it -- passed as a
+    // property rather than hard-coded so a worktree and CI both work unchanged.
+    systemProperty("nightmare.repoRoot", rootProject.projectDir.parentFile.absolutePath)
     testLogging { events("passed", "failed", "skipped") }
 }
