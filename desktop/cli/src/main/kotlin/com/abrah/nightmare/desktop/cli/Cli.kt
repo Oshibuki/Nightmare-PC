@@ -46,6 +46,7 @@ object Cli {
                 EXIT_OK
             }
             Txt2Img.NAME -> Txt2Img.run(args.drop(1), out, err, env)
+            Img2Img.NAME -> Img2Img.run(args.drop(1), out, err, env)
             Models.NAME -> Models.run(args.drop(1), out, err, env)
             else -> {
                 err.append(usageError("unrecognised argument '$first'"))
@@ -66,6 +67,7 @@ object Cli {
         |Usage:
         |  ${ProductIdentity.NAME} <option>
         |  ${ProductIdentity.NAME} txt2img --model <path> --prompt <text> --out <path> [options]
+        |  ${ProductIdentity.NAME} img2img --model <path> --init-img <path> --out <path> [options]
         |  ${ProductIdentity.NAME} models list [--dir <path>]
         |
         |Options:
@@ -74,6 +76,7 @@ object Cli {
         |
         |Commands:
         |  txt2img        Generate images from a prompt with the vendored engine.
+        |  img2img        Rewrite an existing PNG with a prompt and a denoising strength.
         |  models list    List the models in the local library, with their format.
         |
         |txt2img options:
@@ -105,6 +108,26 @@ object Cli {
         |                                  keeps the --out path.
         |      --engine <path>             sd-cli binary to run. Defaults to
         |                                  ${'$'}NIGHTMARE_SD_BIN, then ${Txt2Img.DEFAULT_ENGINE}.
+        |
+        |img2img options:
+        |      --model <path>              Model file to load (required, single-file
+        |                                  .safetensors; its header is checked).
+        |      --init-img <path>           Source PNG to rewrite (required). Its width
+        |                                  and height must be positive multiples of 8,
+        |                                  and default the output size when not given.
+        |      --out <path>                PNG file to write (required).
+        |      --strength <number>         Denoising strength in [0, 1] (default: 0.75).
+        |                                  0 keeps the source, 1 fully re-generates it.
+        |      --prompt <text>             Prompt to render (default: empty).
+        |      --negative-prompt <text>    Negative prompt (default: empty).
+        |      --width <int>               Output width, positive multiple of 8.
+        |      --height <int>              Output height, positive multiple of 8.
+        |      --steps <int>               Sampling steps, 1-150 (default: 20).
+        |      --sampler <name>            Sampling method (default: euler).
+        |      --scheduler <name>          Sigma schedule (default: discrete).
+        |      --cfg-scale <number>        Classifier-free guidance scale, > 0 (default: 7).
+        |      --seed <int>                RNG seed (default: 42). -1 draws a random seed.
+        |      --engine <path>             sd-cli binary to run (same defaults as txt2img).
         |
         |models list options:
         |      --dir <path>                Directory to scan. Defaults to

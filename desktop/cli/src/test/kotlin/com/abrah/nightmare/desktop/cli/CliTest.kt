@@ -75,6 +75,17 @@ class CliTest {
     }
 
     @Test
+    fun `help documents the img2img command and its options`() {
+        assertEquals(0, run("--help"))
+        val text = out.toString()
+        assertTrue("help should name img2img: $text", text.contains("img2img"))
+        assertTrue("help should document --init-img: $text", text.contains("--init-img"))
+        assertTrue("help should document --strength: $text", text.contains("--strength"))
+        assertTrue("help should state the strength range: $text", text.contains("[0, 1]"))
+        assertTrue("help should state the 0.75 strength default: $text", text.contains("default: 0.75"))
+    }
+
+    @Test
     fun `unknown option fails and names the offending argument`() {
         assertEquals(2, run("--frobnicate"))
         assertTrue("a usage error must not print to stdout: $out", out.isEmpty())
