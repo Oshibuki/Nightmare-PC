@@ -36,6 +36,17 @@ class CliTest {
     }
 
     @Test
+    fun `help documents the txt2img command and the exit codes`() {
+        assertEquals(0, run("--help"))
+        val text = out.toString()
+        assertTrue("help should name the command: $text", text.contains("txt2img"))
+        assertTrue("help should list --model: $text", text.contains("--model"))
+        assertTrue("help should list --out: $text", text.contains("--out"))
+        assertTrue("help should document exit code 2: $text", text.contains("Exit codes"))
+        assertTrue("help should point at the model docs: $text", text.contains("desktop/docs/models.md"))
+    }
+
+    @Test
     fun `unknown option fails and names the offending argument`() {
         assertEquals(2, run("--frobnicate"))
         assertTrue("a usage error must not print to stdout: $out", out.isEmpty())
