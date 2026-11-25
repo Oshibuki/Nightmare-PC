@@ -20,6 +20,8 @@
 - 2026-11-26：TDD 红-绿-重构 —— 基线 `:gui:test` 11/11 PASSED（`/tmp/ticket17-baseline.log`）；红 1（`ToolInterface`/`ToolCommand`/`ToolResult` 未定义、编译失败，`/tmp/ticket17-red1.log`）→ 绿 1（`/tmp/ticket17-green1.log`、`/tmp/ticket17-green1b.log`）；红 2（`Connect` 未定义，`/tmp/ticket17-red2.log`）→ 绿 2（4 tests，`/tmp/ticket17-green2.log`）；红 3（`Run` 未定义，`/tmp/ticket17-red3.log`）→ 绿 3（6 tests，`/tmp/ticket17-green3.log`）。重构把 `NewWorkflow` 改为委托 `WorkflowPersistence.newWorkflow()`，并补一条「工具搭出的工作流 save/load 往返相等」用例。
 - 2026-11-26：全量验证 —— `JAVA_HOME=/home/chjlxxc/Android/jdk-17 ./gradlew --no-daemon -Dorg.gradle.jvmargs=-Xmx1536m --no-build-cache cleanTest build` → `BUILD SUCCESSFUL in 41s`（`/tmp/ticket17-full-build.log`）。`ToolInterfaceTest` 7/7、`DefaultModeStateTest` 7/7、`WorkflowRunnerTest` 6/6、`core` 与 `cli` 全量用例均 PASSED（含真实 SD1.5 img2img 用例）。假工具链用例用真实 POSIX shell 假 CLI，从空工作流搭出 prompt→sampler→output 并触发 `Run`，断言 `SUCCESS`、1 条进度事件、1 个真实 PNG 产物、seed=11，且工具设置的 prompt 出现在子进程 argv 中。
 
+- 2026-11-26：收口前 `git merge desktop-migration` → 「已经是最新的」（集成分支 tip 仍为 `998a027`，`/tmp/ticket17-merge.log`）；合并后再次全量 `--no-build-cache cleanTest build` → `BUILD SUCCESSFUL in 26s`，`ToolInterfaceTest` 7/7 PASSED（`/tmp/ticket17-post-merge-build.log`）。
+
 ## 偏离与风险（未验证项不夸大）
 
 - `Run` 按工单要求复用 `DefaultModeState.triggerRun()`，该方法阻塞直到子进程退出；将来对话 effort 若需要非阻塞工具返回，需另做异步接线，本工单未改运行态实现。
