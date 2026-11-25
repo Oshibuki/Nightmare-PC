@@ -12,6 +12,10 @@ Issues and specs for this repo live as markdown files in `.scratch/`.
 - `Optional: yes` marks a ticket that may be closed as `wontfix` without blocking delivery; mandatory tickets must not be `Blocked by` an optional one
 - Comments and conversation history append to the bottom of the file under a `## Comments` heading
 
+## Implementation worktrees
+
+Each ticket is worked in `.codebuddy/worktrees/<NN>` on branch `ticket-<NN>`. Start `/implement <NN>` in that worktree; adopt any uncommitted work already there before merging back to `desktop-migration`.
+
 ## When a skill says "publish to the issue tracker"
 
 Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).

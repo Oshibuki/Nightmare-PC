@@ -3,6 +3,7 @@ package com.abrah.nightmare.desktop.cli
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /**
  * Seam: [Cli.run] -- arguments in, exit code and the two output streams out.
@@ -73,6 +74,30 @@ class CliTest {
         assertTrue("help should explain the batch naming: $text", text.contains("<stem>-<i>.png"))
         assertTrue("help should explain the batch seed: $text", text.contains("seed incrementing"))
         assertTrue("help should explain the metadata chunk: $text", text.contains("parameters"))
+    }
+
+    /** A flag that only exists in the parser is a flag nobody finds: help and README must agree. */
+    @Test
+    fun `README documents every txt2img option the parser accepts`() {
+        assertEquals(0, run("--help"))
+        // Gradle runs each subproject's tests from that subproject, so the
+        // desktop README is one level above :cli.
+        val readme = File("../README.md")
+        assertTrue("README must be readable from :cli: ${readme.absolutePath}", readme.isFile)
+        val documented = readme.readText()
+        val section = out.toString()
+            .substringAfter("txt2img options:")
+            .substringBefore("img2img options:")
+        val flags = Regex("^\\s*--[a-z0-9_-]+", RegexOption.MULTILINE)
+            .findAll(section)
+            .map { it.value.trim() }
+            .toSet()
+        assertTrue("no txt2img flags found in help: $section", flags.isNotEmpty())
+        assertEquals(
+            "help flags missing from README.md",
+            emptyList<String>(),
+            flags.filterNot { documented.contains(it) },
+        )
     }
 
     @Test

@@ -106,6 +106,8 @@ that is not the PNG it claims to be), `2` the command line itself was wrong
 | `--seed` | 42 | any integer; `-1` draws one and reports it |
 | `--batch` | 1 | 1–16 |
 | `--engine` | `$NIGHTMARE_SD_BIN`, then `desktop/engine/build/bin/sd-cli` | a path |
+| `--lora` | unset | `file[@mult]`; repeat the flag or comma-separate several |
+| `--lora-dir` | `$NIGHTMARE_MODELS/lora`, then `~/.cache/nightmare-desktop/models/lora` | folder holding the LoRA weights |
 | `--vae` | unset (required with `--diffusion-model`) | path to readable safetensors/GGUF VAE weights; standalone SDXL VAE or multi-file decoder |
 | `--vae-tiling` | off | bare flag on; `--vae-tiling=false` off |
 | `--vae-tile-size` | engine default `32x32` | positive `WxH` |
@@ -213,7 +215,10 @@ unauthenticated generation endpoint to the LAN. `--port` defaults to `1234`
 `engine/build.sh` already builds it alongside `sd-cli`. The server's stdout and
 stderr are forwarded, and a non-zero engine exit becomes a non-zero CLI exit.
 
-The engine's own A1111-style routes are then available on the loopback port:
+The engine's own A1111-style routes are then available on the loopback port.
+Their request fields and response shape are documented in
+[`engine/sdcpp/examples/server/api.md`](engine/sdcpp/examples/server/api.md),
+with the route implementations in `routes_sdapi.cpp` beside it:
 
 ```bash
 curl --max-time 300 -sS -H 'Content-Type: application/json' \
