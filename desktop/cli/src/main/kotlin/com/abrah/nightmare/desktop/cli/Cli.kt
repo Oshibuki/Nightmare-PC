@@ -2,9 +2,10 @@ package com.abrah.nightmare.desktop.cli
 
 import com.abrah.nightmare.desktop.core.ModelLibrary
 import com.abrah.nightmare.desktop.core.ProductIdentity
+import com.abrah.nightmare.desktop.core.SamplerWire
 
 /**
- * The command line surface: identity, usage, and the Phase 0 `txt2img` command.
+ * The command line surface: identity, usage, and the `txt2img` command.
  * Argument handling is a pure function of (args, environment, streams) so it
  * can be tested without spawning a process, and so [Main] stays a two-line
  * adapter.
@@ -72,7 +73,7 @@ object Cli {
         |      --version  Print the product version and exit.
         |
         |Commands:
-        |  txt2img        Generate one image from a prompt with the vendored engine.
+        |  txt2img        Generate images from a prompt with the vendored engine.
         |  models list    List the models in the local library, with their format.
         |
         |txt2img options:
@@ -80,18 +81,39 @@ object Cli {
         |                                  .safetensors checkpoint; its header is checked
         |                                  before the engine starts.
         |      --prompt <text>             Prompt to render (required).
-        |      --out <path>                PNG file to write (required).
+        |      --out <path>                PNG file to write (required). With
+        |                                  --batch, the first image is written
+        |                                  here and the rest beside it.
         |      --negative-prompt <text>    Negative prompt (default: empty).
-        |      --width <int>               Image width in pixels (default: 512).
-        |      --height <int>              Image height in pixels (default: 512).
-        |      --steps <int>               Sampling steps (default: 20).
-        |      --seed <int>                RNG seed (default: 42).
+        |      --width <int>               Image width in pixels (default: 512);
+        |                                  a positive multiple of 8.
+        |      --height <int>              Image height in pixels (default: 512);
+        |                                  a positive multiple of 8.
+        |      --steps <int>               Sampling steps, 1-150 (default: 20).
+        |      --sampler <name>            Sampling method (default: euler). One of:
+        |                                  ${SamplerWire.SAMPLERS.joinToString(", ")}.
+        |      --scheduler <name>          Sigma schedule (default: discrete). One of:
+        |                                  ${SamplerWire.SCHEDULERS.joinToString(", ")}.
+        |      --cfg-scale <number>        Classifier-free guidance scale, > 0
+        |                                  (default: 7).
+        |      --seed <int>                RNG seed (default: 42). -1 draws a random
+        |                                  seed, which is printed and recorded.
+        |      --batch <int>               Images to generate, 1-16 (default: 1).
+        |                                  They are generated one at a time with the
+        |                                  seed incrementing from --seed, and named
+        |                                  <stem>-<i>.png after the first, which
+        |                                  keeps the --out path.
         |      --engine <path>             sd-cli binary to run. Defaults to
         |                                  ${'$'}NIGHTMARE_SD_BIN, then ${Txt2Img.DEFAULT_ENGINE}.
         |
         |models list options:
         |      --dir <path>                Directory to scan. Defaults to
         |                                  ${'$'}${ModelLibrary.ENV_MODELS}, then ~/${ModelLibrary.DEFAULT_SUBPATH}.
+        |
+        |Progress goes to stdout: one "[i/N] seed=<seed> -> <path>" line per image,
+        |then the engine's own output as it arrives. Each PNG carries an
+        |A1111-style "parameters" chunk (prompt, negative prompt, steps, sampler,
+        |schedule, CFG scale, seed, size) so a batch can be reproduced later.
         |
         |Exit codes:
         |  0  the request was served (an empty model library included)

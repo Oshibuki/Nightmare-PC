@@ -20,13 +20,34 @@ tree: a copied file missing from here is a file whose origin nobody can trace.
 | App path (`app/src/main/java/…`) | Desktop path (`desktop/core/src/…`) | Its test | Notes |
 | --- | --- | --- | --- |
 | `com/abrah/nightmare/GgufHeader.kt` | `main/kotlin/com/abrah/nightmare/GgufHeader.kt` | `test/kotlin/com/abrah/nightmare/GgufCompleteTest.kt`, `test/kotlin/com/abrah/nightmare/GgufCpuTypesTest.kt` | Byte-for-byte copy (JDK only: `java.io`, `java.nio`). GGUF header parse, tensor table, `dataEnd`/`isComplete` for resume, `cpuTypes` naming. |
+| `com/abrah/nightmare/ModelCatalog.kt` (sampler section only) | `main/kotlin/com/abrah/nightmare/Samplers.kt` | `test/kotlin/com/abrah/nightmare/SamplersTest.kt` | **Excerpt**, not the file: `SAMPLERS`, `SCHEDULES`, `DIT_SCHEDULES`, `DIT_SAMPLERS`, `DIT_SAMPLER_IDS`, `DIT_COMMON_SAMPLER_IDS`, `H3_SPECTRAL`, `DEFAULT_SCHEDULER`, `DEFAULT_STEPS`/`DEFAULT_CFG`/`STEPS_RANGE`/`CFG_RANGE`, `SCHEDULERS`, `DIT_SCHEDULERS`, `schedulesSupported`/`karrasSupported`/`splitScheduler`/`joinScheduler`×2/`samplerName`/`schedulerLabel`. Receiver renamed `ModelCatalog` → `Samplers`; every declaration is otherwise verbatim. |
+| `app/src/test/java/…/SamplerNamingTest.kt` | — (test, not source) | `test/kotlin/com/abrah/nightmare/SamplersTest.kt` | The mobile assertions, unchanged, against `Samplers`. Two tests were **trimmed**, not relaxed — see below. |
 
-Four tests, all passing on the desktop build:
+Four `GgufHeader` tests and ten `Samplers` tests, all passing on the desktop build:
 
 - `GgufCompleteTest` — 3 (`theHeaderSaysWhereTheDataEnds`, `aWholeFileOfAnySizeIsComplete`, `aHalfDownloadIsNot`)
 - `GgufCpuTypesTest` — 1 (`aKQuantModelIsNamedAndAStrayHeadIsNot`)
+- `SamplersTest` — 10 (`everyWireValueRoundTrips`, `thePickerCanOnlyProduceKnownWireValues`,
+  `lcmNeverGainsAScheduleSuffix`, `everyOtherSamplerHasEverySchedule`, `theOldIdsStillParse`,
+  `anUnknownSchedulerFallsBackToTheDefault`, `labelsAreTheFamiliarNames`,
+  `theDitModelsGetSgmUniformAndBongTangent`, `theSpectralSamplerIsItsOwnWireValue`,
+  `ditSamplersJoinAndSplitTheSameWay`)
 
-The tests were copied unchanged apart from the provenance line: same package,
+⚠ What was **not** copied from `ModelCatalog.kt`, and why:
+
+| Mobile declaration | Why it stayed behind |
+| --- | --- |
+| `schedulersFor(family: Family)` | Its parameter is `Family`, an enum owned by the Android-coupled part of `ModelCatalog.kt` (and `Family.dit` decides the engine). Porting it means porting `Family`, `ModelSpec` and `SelectedModel` — ticket 13's work, not this one. |
+| the two mobile tests that call it | `theSpectralSamplerIsH3ImagesAlone` and `ditFamiliesOfferTheEnginesSamplers` assert through `schedulersFor`. Their **wire-level** assertions were kept as `theSpectralSamplerIsItsOwnWireValue` and `ditSamplersJoinAndSplitTheSameWay`; the per-family ones are trimmed, and come back with `Family`. |
+
+⚠ Not copied, and deliberately not in the table above: `desktop/core/src/main/kotlin/com/abrah/nightmare/desktop/core/SamplerWire.kt`.
+It is desktop-only glue that *narrows* `Samplers` to the names the vendored
+engine's `sample_method_to_str[]` / `scheduler_to_str[]` actually contain (the
+mobile ids `dpm`/`dpm_sde`/… are the QNN backend's spelling, not
+stable-diffusion.cpp's). It has no mobile original, so there is no pair to
+record — `SamplerWireTest` pins it against the engine's arrays instead.
+
+The `GgufHeader` tests were copied unchanged apart from the provenance line: same package,
 same class names, same assertions. Nothing was relaxed to make them compile —
 they compile because `GgufHeader` is genuinely platform-free.
 
@@ -58,7 +79,7 @@ shape, not a copy, so it is left to the ticket that owns that file.
 | `com/abrah/nightmare/BatchParams.kt` | `axesOf(graph: Graph)` / `runCount(graph: Graph)` (`BatchParams.kt:177,232`) | Phase 1 (11/12) |
 | `com/abrah/nightmare/npu/Scheduler.kt` | `AppAssets.config` — `npu/AppAssets.kt:3-4` imports `android.content.Context` + `org.json` | Phase 1 (14/15, samplers), after a desktop config loader exists |
 | `com/abrah/nightmare/GgufWiden.kt` | `Family` (`ModelCatalog.kt:43`); also `ModelInstaller.Cancelled` and `TemplateLora.halfToFloat` | Phase 1 (13, model catalog + import) |
-| `com/abrah/nightmare/ModelCatalog.kt` | `android.content.Context` (`ModelCatalog.kt:3`) at file level; also `Family`, `ModelSpec`, `SelectedModel` | Phase 1 (13) |
+| `com/abrah/nightmare/ModelCatalog.kt` | `android.content.Context` (`ModelCatalog.kt:3`) at file level; also `Family`, `ModelSpec`, `SelectedModel` | Phase 1 (13) — **except** its sampler section, which is platform-free and was copied to `Samplers.kt` (see above) |
 | `com/abrah/nightmare/SafetensorsGguf.kt` | `android.util.Half` + `org.json` (`SafetensorsGguf.kt:3-4`) | Phase 1 (13) |
 | `com/abrah/nightmare/Executor.kt` | `androidx.annotation`, `android.graphics.Bitmap`/`BitmapFactory`, `kotlinx.coroutines`; 3273 lines, the whole backend host | Phase 1 (17, API) — only after the node registry is separated |
 | `com/abrah/nightmare/Streams.kt` | nothing — pure, but its only consumers on the copy list (`GgufWiden`, the importers) are skipped | copy it with the importers (13) |
