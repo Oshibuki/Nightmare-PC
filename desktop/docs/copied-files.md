@@ -22,6 +22,16 @@ tree: a copied file missing from here is a file whose origin nobody can trace.
 | `com/abrah/nightmare/GgufHeader.kt` | `main/kotlin/com/abrah/nightmare/GgufHeader.kt` | `test/kotlin/com/abrah/nightmare/GgufCompleteTest.kt`, `test/kotlin/com/abrah/nightmare/GgufCpuTypesTest.kt` | Byte-for-byte copy (JDK only: `java.io`, `java.nio`). GGUF header parse, tensor table, `dataEnd`/`isComplete` for resume, `cpuTypes` naming. |
 | `com/abrah/nightmare/ModelCatalog.kt` (sampler section only) | `main/kotlin/com/abrah/nightmare/Samplers.kt` | `test/kotlin/com/abrah/nightmare/SamplersTest.kt` | **Excerpt**, not the file: `SAMPLERS`, `SCHEDULES`, `DIT_SCHEDULES`, `DIT_SAMPLERS`, `DIT_SAMPLER_IDS`, `DIT_COMMON_SAMPLER_IDS`, `H3_SPECTRAL`, `DEFAULT_SCHEDULER`, `DEFAULT_STEPS`/`DEFAULT_CFG`/`STEPS_RANGE`/`CFG_RANGE`, `SCHEDULERS`, `DIT_SCHEDULERS`, `schedulesSupported`/`karrasSupported`/`splitScheduler`/`joinScheduler`×2/`samplerName`/`schedulerLabel`. Receiver renamed `ModelCatalog` → `Samplers`; every declaration is otherwise verbatim. |
 | `app/src/test/java/…/SamplerNamingTest.kt` | — (test, not source) | `test/kotlin/com/abrah/nightmare/SamplersTest.kt` | The mobile assertions, unchanged, against `Samplers`. Two tests were **trimmed**, not relaxed — see below. |
+| `com/abrah/nightmare/LoraSpec.kt` | `main/kotlin/com/abrah/nightmare/LoraSpec.kt` | `test/kotlin/com/abrah/nightmare/LoraSpecTest.kt` | Byte-for-byte copy apart from the provenance line (JDK only: `java.util.Locale`). The one tokeniser for the `file@multiplier` spelling; the CLI's `--lora` uses it too, so both spellings agree. |
+| `com/abrah/nightmare/PromptLoras.kt` (tag-parser excerpt) | `main/kotlin/com/abrah/nightmare/PromptLoras.kt` | `test/kotlin/com/abrah/nightmare/PromptLorasTest.kt` | **Excerpt**: `Tag`, `Split`, `TAG`, `extract`, `tidy`, `resolve`, `merge` — verbatim. The rest of the mobile object is Android-coupled; see Skipped. |
+| `app/src/test/java/…/LoraSpecTest.kt` | — (test, not source) | `test/kotlin/com/abrah/nightmare/LoraSpecTest.kt` | The mobile assertions, unchanged apart from the provenance line. |
+| `app/src/test/java/…/PromptLorasTest.kt` | — (test, not source) | `test/kotlin/com/abrah/nightmare/PromptLorasTest.kt` | The mobile assertions, unchanged apart from the provenance line. All five call only the copied parser/merge. |
+| `com/abrah/nightmare/api/MiniHttp.kt` | `main/kotlin/com/abrah/nightmare/api/MiniHttp.kt` | `test/kotlin/com/abrah/nightmare/api/MiniHttpTest.kt`, `ApiCorsTest.kt` | The JVM `java.net` server. **Edited for desktop**: binds `127.0.0.1` (mobile bound every interface), default peer gate is `isLoopbackPeer` (mobile admitted LAN/tailnet), and the mobile-only "Settings → API on the phone" hint was reworded. `err()` still uses `org.json`, now the pinned JVM artifact in `libs.versions.toml`. |
+| `com/abrah/nightmare/api/ApiSettings.kt` (excerpt) | `main/kotlin/com/abrah/nightmare/api/ApiSettings.kt` | `test/kotlin/com/abrah/nightmare/api/ApiSettingsTest.kt` | **Excerpt**: `PORT`, `CORS_HEADERS`, `matches`, `BEARER` verbatim. The `Context`/`SharedPreferences` accessors (`enabled`, `token`, `regenerate`, `cors`) stayed behind. |
+| `com/abrah/nightmare/api/NightmareApi.kt` (`corsPreflight` only) | `main/kotlin/com/abrah/nightmare/api/ApiCors.kt` | `test/kotlin/com/abrah/nightmare/api/ApiCorsTest.kt` | **Excerpt**, promoted from the `NightmareApi` companion to a top-level function; body otherwise verbatim. |
+| `com/abrah/nightmare/api/A1111.kt` (path helpers only) | `main/kotlin/com/abrah/nightmare/api/A1111.kt` | `test/kotlin/com/abrah/nightmare/api/A1111Test.kt` | **Excerpt**: `handles`, `TXT2IMG`, `MAX_IMAGES`, `nearestAspect` verbatim; `ASPECTS`/`DEFAULT_ASPECT`/`ratioValue` are an excerpt of `ModelCatalog.kt` (also verbatim). Everything that speaks in `ModelSpec` stayed behind — see the skip table. |
+| `com/abrah/nightmare/api/FlowRequest.kt` (`ApiError` + `RunRequest.parse`) | `main/kotlin/com/abrah/nightmare/api/RunRequest.kt` | `test/kotlin/com/abrah/nightmare/api/RunRequestTest.kt` | **Excerpt**: the request body is verbatim; `applyOverrides`, `frameShaped`, `apiRange`, `checked` are not copied. |
+| `app/src/test/java/…/api/ApiTest.kt` (server/token/CORS/body halves) | — (test, not source) | `test/kotlin/com/abrah/nightmare/api/{MiniHttpTest,ApiSettingsTest,ApiCorsTest,RunRequestTest,A1111Test}.kt` | The socket, token, CORS, SSE, body-parse and path-helper assertions were migrated unchanged in meaning. `@RunWith(RobolectricTestRunner::class)` is gone: `org.json` is a JVM artifact here. Two body-parse inputs were made unambiguous (they now include a `flow`) so the named-error assertion reaches the check it names. The LAN allow-list test became the loopback-only test below. |
 
 Four `GgufHeader` tests and ten `Samplers` tests, all passing on the desktop build:
 
@@ -32,6 +42,24 @@ Four `GgufHeader` tests and ten `Samplers` tests, all passing on the desktop bui
   `anUnknownSchedulerFallsBackToTheDefault`, `labelsAreTheFamiliarNames`,
   `theDitModelsGetSgmUniformAndBongTangent`, `theSpectralSamplerIsItsOwnWireValue`,
   `ditSamplersJoinAndSplitTheSameWay`)
+
+Seven `LoraSpec` tests and five `PromptLoras` tests join them (ticket 16). They
+are the unchanged mobile assertions, so the desktop `--lora` parser cannot
+silently drift from the tag spelling a CivitAI prompt uses.
+
+Thirteen more JVM tests cover the copied API layer, all passing on the desktop build:
+
+- `MiniHttpTest` — 6 (`aRequestReachesTheHandlerWithItsPathQueryAndBody`, `aHandlerThatThrowsIsA500NotAHang`,
+  `eventsStreamInOrder`, `onlyLoopbackPeersMayConnect`, `theServerIsNotReachableThroughANonLoopbackAddress`,
+  `anUnadmittedBodyIsRefusedBeforeItIsRead`)
+- `ApiSettingsTest` — 1 (`theTokenMustMatchExactly`)
+- `ApiCorsTest` — 2 (`withBrowserPagesAllowedAPreflightIsAnsweredBeforeTheTokenAndEveryAnswerCarriesTheHeaders`,
+  `withBrowserPagesOffNothingChanges`)
+- `A1111Test` — 2 (`onlySdApiV1PathsAreHandled`, `theNearestAspectIsTheOneAClientAskedFor`)
+- `RunRequestTest` — 2 (`aBodyIsParsedIntoItsFields`, `everyMistakeIsNamedBeforeAnythingRuns`)
+
+Every event-driven API test carries a JUnit timeout; the LAN-bind test uses `Assume` when the host has no
+non-loopback IPv4 address, so it cannot hang or fail on an interface-less runner.
 
 ⚠ What was **not** copied from `ModelCatalog.kt`, and why:
 
@@ -83,6 +111,22 @@ shape, not a copy, so it is left to the ticket that owns that file.
 | `com/abrah/nightmare/SafetensorsGguf.kt` | `android.util.Half` + `org.json` (`SafetensorsGguf.kt:3-4`) | Phase 1 (13) |
 | `com/abrah/nightmare/Executor.kt` | `androidx.annotation`, `android.graphics.Bitmap`/`BitmapFactory`, `kotlinx.coroutines`; 3273 lines, the whole backend host | Phase 1 (17, API) — only after the node registry is separated |
 | `com/abrah/nightmare/Streams.kt` | nothing — pure, but its only consumers on the copy list (`GgufWiden`, the importers) are skipped | copy it with the importers (13) |
+| `com/abrah/nightmare/PromptLoras.kt` (autocomplete half: `Hint`/`hintFor`, `Open`/`openTagAt`, `rank`, `complete`) | `Graph` and its `NodeType`/`NODE_TYPES` (`Executor.kt:411,2722`) through `hintFor`; `SdSampler.LORAS`; `LoraLibrary.Base` (`LoraLibrary.kt:3` imports `android.content.Context`); `ModelCatalog.byId` (`ModelCatalog.kt:3` imports `android.content.Context`) | Phase 1 (17, API) / Phase 2 GUI — the desktop CLI only needs the tag parser and merge above |
+| `com/abrah/nightmare/LoraNotes.kt` | `org.json.JSONObject` (`LoraNotes.kt:3`) and `Graph` (`promptNodeOf`, `LoraNotes.kt:72`) | Phase 2 GUI (note editing); the CLI reads prompt tags, not per-LoRA notes |
+| `com/abrah/nightmare/LoraClean.kt` | `org.json.JSONArray`/`JSONObject` (`LoraClean.kt:3-4`) | Phase 1 (13/16) if weight repair is wanted; not needed to apply a LoRA |
+| `com/abrah/nightmare/LoraInstall.kt` | `android.content.Context` (`LoraInstall.kt:3`) | Phase 1 (13, local import tooling) |
+| `com/abrah/nightmare/LoraLibrary.kt` | `android.content.Context` (`LoraLibrary.kt:3`) | Phase 1 (13/17, library management) |
+| `com/abrah/nightmare/LoraSources.kt` | `org.json` (`LoraSources.kt:3-4`); also HTTP catalogue download, out of scope here | Phase 1 (13, remote discovery/import) |
+| `com/abrah/nightmare/TemplateLora.kt` | `org.json.JSONObject` (`TemplateLora.kt:3`) | Phase 1 (13) / Phase 2 GUI (template conversion) |
+| `com/abrah/nightmare/api/A1111.kt` (`route`, `txt2img`, `knobsFor`, `samplerFor`, `sdModels`, `options`, `setOptions`, `modelNamed`) | `ModelSpec`, `Family`, `SelectedModel` (`ModelCatalog.kt`) and `ModelCatalog.schedulersFor`/`keptSize`; also `ApiCore` (`Graph`/`NodeType`, `android.util.Base64`, `BitmapFactory`) | Phase 1 API: ticket 17 exposes the engine's own A1111 service; the path/aspect helpers above are the part that needs no catalog |
+| `com/abrah/nightmare/api/ApiCore.kt` | `Graph`, `NodeType`, `SdSampler`, `Workflow` (the node registry), plus `android.content.Context`, `android.graphics.BitmapFactory`, `kotlinx.coroutines` | Phase 1 executor, after the node registry is separated |
+| `com/abrah/nightmare/api/NightmareApi.kt` (`route`, `run`, `info`) | `ApiCore` and `RunLock`, `BuildConfig`, `Graph`/`NodeType`; the only moved piece is the pure `corsPreflight` | tickets 17 (engine server) and 25 (real client authentication) |
+| `com/abrah/nightmare/api/ApiService.kt` | `android.app.Service`/`Notification`/`PendingIntent` and generated `R.string` ids — a foreground service has no desktop equivalent | not applicable; the desktop server is an explicit CLI entry point (17) |
+| `com/abrah/nightmare/api/FlowRequest.kt` (`applyOverrides`, `frameShaped`, `apiRange`, `checked`) | `Graph`, `NodeType`, `Widget`, `CropRect`, `ModelSpec` from the executor/graph layer | Phase 1 executor / Phase 2 GUI, after the registry is separated |
+
+`LoraPartial.kt` is pure, not Android-blocked, but was still left behind: it
+parses the server's `Req Rcvd`-delimited log stream, which the one-shot CLI
+does not produce. Revisit it with ticket 17's HTTP API.
 
 Tests that were evaluated and not copied, because they test a skipped source:
 
@@ -95,6 +139,17 @@ Tests that were evaluated and not copied, because they test a skipped source:
 | `app/src/test/…/BatchTest.kt`, `BatchParamsTest.kt`, `BatchChoicesTest.kt` | import `Graph`/`canvas.inpaintWorkflow` |
 | `app/src/test/…/GgufWidenTest.kt` | uses `Family.FLUX2`/`Family.ZIMAGE` |
 | `app/src/test/…/GgufImportTest.kt`, `Int8GgufTest.kt`, `Fp8Q8GgufTest.kt`, `SafetensorsGgufTest.kt` | `RobolectricTestRunner`, `androidx.test`, `org.json` |
+| `app/src/test/…/api/ApiTest.kt` — `anA1111BodyMapsOntoTheModel` | needs `ModelCatalog.byId("sdxl_dreamshaper")`, `ModelSpec.fixedCanvas`/`isDit`, `ModelCatalog.schedulersFor` (`Family`) and `ApiCore` |
+| `app/src/test/…/api/ApiTest.kt` — `theShortcutsReachThePromptAndTheSampler`, `aPictureBecomesTheImageNodesFile`, `aClipBecomesTheVideoNodesFile`, `aFrameMayHangOffThePhoto`, `anOutpaintFrameSetAloneTakesTheRenderShapeWithIt`, graph-level `everyMistakeIsNamedBeforeAnythingRuns` | need `Graph`, `NODE_TYPES`, `SdSampler`, `canvas.motionTransferWorkflow` — the node registry is not separated yet |
+| `app/src/test/…/api/ApiTest.kt` — `onlyLocalPeersMayConnect` (mobile LAN/tailnet allow-list) | **superseded**, not trimmed: the desktop server binds loopback only, so the assertion is inverted in `MiniHttpTest.onlyLoopbackPeersMayConnect` and backed by a real socket bind test |
+
+## Desktop service exposure
+
+The copied HTTP shell is **off by default** and binds `127.0.0.1` only; `MiniHttp.isLoopbackPeer`
+refuses every non-loopback peer as a second gate. This is a deliberate divergence from the mobile
+allow-list, recorded above. The CLI entry point that starts the engine's A1111-compatible server,
+the endpoint smoke test and real third-party client authentication are tickets 17 and 25 — they are
+not implemented here.
 
 ## The finding: two files are the gate
 

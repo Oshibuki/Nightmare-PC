@@ -57,6 +57,7 @@ class CliTest {
         for (option in listOf(
             "--negative-prompt", "--width", "--height", "--steps",
             "--sampler", "--scheduler", "--cfg-scale", "--seed", "--batch", "--engine",
+            "--diffusion-model", "--llm", "--vae", "--llm_vision",
         )) {
             assertTrue("help should document $option: $text", text.contains(option))
         }
@@ -72,6 +73,17 @@ class CliTest {
         assertTrue("help should explain the batch naming: $text", text.contains("<stem>-<i>.png"))
         assertTrue("help should explain the batch seed: $text", text.contains("seed incrementing"))
         assertTrue("help should explain the metadata chunk: $text", text.contains("parameters"))
+    }
+
+    @Test
+    fun `help documents the img2img command and its options`() {
+        assertEquals(0, run("--help"))
+        val text = out.toString()
+        assertTrue("help should name img2img: $text", text.contains("img2img"))
+        assertTrue("help should document --init-img: $text", text.contains("--init-img"))
+        assertTrue("help should document --strength: $text", text.contains("--strength"))
+        assertTrue("help should state the strength range: $text", text.contains("[0, 1]"))
+        assertTrue("help should state the 0.75 strength default: $text", text.contains("default: 0.75"))
     }
 
     @Test

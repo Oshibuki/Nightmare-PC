@@ -1,6 +1,9 @@
 package com.abrah.nightmare.desktop.cli
 
+import com.abrah.nightmare.LoraSpec
+import com.abrah.nightmare.PromptLoras
 import com.abrah.nightmare.desktop.core.ModelFile
+import com.abrah.nightmare.desktop.core.ModelLibrary
 import com.abrah.nightmare.desktop.core.ProductIdentity
 import com.abrah.nightmare.desktop.core.SamplerWire
 import java.io.File
@@ -28,6 +31,10 @@ import kotlin.random.Random
  * - **The metadata.** The engine writes pixels; the CLI writes the A1111-style
  *   `parameters` chunk beside them, because a batch of PNGs with no record of
  *   the seed and sampler that made them cannot be reproduced.
+ * - **The model split.** `--model` is one self-contained checkpoint; the DiT
+ *   families use `--diffusion-model` with `--llm` and `--vae`, plus `--llm_vision`
+ *   for Qwen Image. Both selections are checked before the engine starts, so a
+ *   missing file costs a second rather than a model load.
  *
  * ⚠ `--model` is also checked against its own header before the engine starts
  * (see [ModelFile]): a half-downloaded checkpoint otherwise costs minutes of
@@ -70,9 +77,10 @@ internal object Txt2Img {
     private const val RANDOM_SEED = -1L
 
     private val KNOWN_OPTIONS = setOf(
-        "model", "prompt", "negative-prompt", "width", "height",
+        "model", "diffusion-model", "llm", "vae", "llm_vision",
+        "prompt", "negative-prompt", "width", "height",
         "steps", "sampler", "scheduler", "cfg-scale", "seed", "batch", "out", "engine",
-        "vae", "vae-tiling", "vae-tile-size", "vae-tile-overlap",
+        "lora", "lora-dir", "vae-tiling", "vae-tile-size", "vae-tile-overlap",
     )
 
     /**
@@ -84,53 +92,48 @@ internal object Txt2Img {
 
     fun run(args: List<String>, out: Appendable, err: Appendable, env: Map<String, String>): Int {
         val request = try {
-            parse(args).also { parsed ->
-                requireLoadableModel(parsed.model)
-                parsed.vae?.let(::requireLoadableVae)
-            }
+            parse(args, env).also { requireLoadableModels(it.choice) }
         } catch (e: UsageException) {
             err.append(usageError(e.message ?: "bad arguments"))
             return Cli.EXIT_USAGE
         }
 
         // Check what we can check ourselves before paying for a model load: a
-        // typo in --model must not cost ten minutes of engine start-up.
-        val model = File(request.model)
-        if (!model.isFile) {
-            err.append(failure("model '${request.model}' does not exist or is not a file"))
-            return Cli.EXIT_FAILURE
-        }
-        if (!model.canRead()) {
-            err.append(failure("model '${request.model}' is not readable"))
-            return Cli.EXIT_FAILURE
-        }
-        // The name is a claim; the header is the evidence. Refuse a GGUF here:
-        // sd-cli's -m is a single-file checkpoint, so a DiT GGUF there renders noise.
-        val contents = try {
-            ModelFile.read(model.toPath())
-        } catch (e: IOException) {
-            err.append(failure("model '${request.model}' is not usable: ${e.message}"))
-            return Cli.EXIT_FAILURE
-        }
-        if (contents is ModelFile.Contents.Gguf) {
-            err.append(
-                failure(
-                    "model '${request.model}' is a GGUF diffusion model. Those are loaded with " +
-                        "--diffusion-model (plus --llm and --vae), which this build does not implement yet; " +
-                        "nothing was generated. Pass a single-file .safetensors checkpoint to --model.",
-                ),
-            )
-            return Cli.EXIT_FAILURE
-        }
-        // An SDXL VAE is a real weight file, not a label. Refuse a missing one
-        // here rather than after the 6.9 GB checkpoint has been decoded.
-        if (request.vae != null) {
-            val vaeFile = File(request.vae)
-            if (!vaeFile.isFile || !vaeFile.canRead()) {
-                err.append(failure("VAE '${request.vae}' does not exist or is not readable"))
-                return Cli.EXIT_FAILURE
+        // typo in any path must not cost ten minutes of engine start-up. Every
+        // error names the option, so a multi-file command says which of its
+        // files is wrong instead of just "model missing".
+        try {
+            when (val choice = request.choice) {
+                is ModelChoice.SingleFile -> {
+                    // The name is a claim; the header is the evidence. Refuse a
+                    // GGUF here: sd-cli's -m is a single-file checkpoint, so a
+                    // DiT GGUF there renders noise.
+                    if (readModel("--model", choice.path) is ModelFile.Contents.Gguf) {
+                        throw ModelProblem(ggufInModelMessage(choice.path))
+                    }
+                    // An SDXL VAE is real weight, not a label: check it before
+                    // the 6.9 GB checkpoint is decoded.
+                    choice.vae?.let { readModel("--vae", it) }
+                }
+                is ModelChoice.MultiFile -> {
+                    readModel("--diffusion-model", choice.diffusionModel)
+                    readModel("--llm", choice.llm)
+                    readModel("--vae", choice.vae)
+                    choice.llmVision?.let { readModel("--llm_vision", it) }
+                }
             }
+        } catch (e: ModelProblem) {
+            err.append(failure(e.message ?: "bad model"))
+            return Cli.EXIT_FAILURE
         }
+
+        // sdcpp only WARNs and carries on when a <lora:...> name does not
+        // resolve, so a typo would silently produce an image without the
+        // adapter. Check every weight here instead: the engine is never
+        // started for a LoRA request we cannot honour.
+        val lora = prepareLoras(request, err) ?: return Cli.EXIT_FAILURE
+
+
         val engine = File(request.engine ?: env[ENV_ENGINE] ?: DEFAULT_ENGINE)
         if (!engine.isFile) {
             err.append(
@@ -166,43 +169,111 @@ internal object Txt2Img {
             val target = if (index == 1) outFile else numbered(outFile, index)
             out.append("[${index}/${request.batch}] seed=$seed -> ${target.path}\n")
             (out as? Flushable)?.flush()
-            val failureCode = generate(engine, request, target, seed, out, err)
+            val failureCode = generate(engine, request, lora, target, seed, out, err)
             if (failureCode != Cli.EXIT_OK) return failureCode
         }
         return Cli.EXIT_OK
+    }
+
+    /**
+     * The LoRA request after checking it against the weights on disk.
+     *
+     * [enginePrompt] carries the resolved `<lora:file:multiplier>` tags that
+     * the pinned sdcpp CLI understands; [applied] is the same list in the
+     * A1111 `file@multiplier` spelling used by the copied Android helper, for
+     * the PNG's parameters. [dir] is null when no LoRA was requested, so a
+     * plain run's engine command is byte-for-byte what it was before.
+     */
+    private class LoraPlan(
+        val enginePrompt: String,
+        val applied: List<LoraSpec.Entry>,
+        val dir: String?,
+    )
+
+    /**
+     * Resolve `--lora` entries and prompt-embedded tags against the LoRA
+     * directory, then hand the engine exactly one tag per file. A prompt tag
+     * wins over `--lora` for the same file, as it does on Android.
+     *
+     * Returns null after writing the reason to [err] -- a missing weight is a
+     * failed request, not a usage error, because the command line itself was
+     * well formed.
+     */
+    private fun prepareLoras(request: Request, err: Appendable): LoraPlan? {
+        val split = PromptLoras.extract(request.prompt)
+        if (request.loraEntries.isEmpty() && split.tags.isEmpty()) {
+            return LoraPlan(request.prompt, emptyList(), null)
+        }
+        val dir = File(request.loraDir)
+        if (!dir.isDirectory) {
+            err.append(
+                failure(
+                    "LoRA directory '${dir.path}' does not exist or is not a directory; " +
+                        "pass --lora-dir <path> pointing at the folder with the .safetensors weights",
+                ),
+            )
+            return null
+        }
+        val installed = dir.listFiles()?.filter { it.isFile && !it.isHidden }?.map { it.name } ?: emptyList()
+
+        val fromPrompt = mutableListOf<LoraSpec.Entry>()
+        for (tag in split.tags) {
+            val file = PromptLoras.resolve(tag.name, installed)
+            if (file == null) {
+                err.append(failure("LoRA '${tag.name}' in --prompt was not found in '${dir.path}'; nothing was generated"))
+                return null
+            }
+            fromPrompt += LoraSpec.Entry(file, tag.strength)
+        }
+        // The same tokeniser as the mobile picker: one tag per file, prompt wins.
+        val merged = LoraSpec.parse(PromptLoras.merge(LoraSpec.format(request.loraEntries), fromPrompt))
+        val applied = mutableListOf<LoraSpec.Entry>()
+        for (entry in merged) {
+            val file = PromptLoras.resolve(entry.name, installed)
+            if (file == null) {
+                err.append(failure("LoRA weight '${entry.name}' was not found in '${dir.path}'; pass --lora-dir <path> or check the name"))
+                return null
+            }
+            applied += LoraSpec.Entry(file, entry.strength)
+        }
+        val tags = applied.joinToString(" ") { "<lora:${it.name}:${LoraSpec.number(it.strength)}>" }
+        val enginePrompt = if (split.text.isEmpty()) tags else "${split.text} $tags"
+        return LoraPlan(enginePrompt, applied, dir.path)
     }
 
     /** One engine run, then the checks that make its exit code mean something. */
     private fun generate(
         engine: File,
         request: Request,
+        lora: LoraPlan,
         target: File,
         seed: Long,
         out: Appendable,
         err: Appendable,
     ): Int {
-        // The SDXL/VAE knobs are appended only when asked for, so the SD1.5
-        // command line stays byte-for-byte the one ticket 11 documented.
-        val engineArgs = mutableListOf(
-            "-m", request.model,
-            "-p", request.prompt,
-            "-n", request.negativePrompt,
-            "-W", request.width.toString(),
-            "-H", request.height.toString(),
-            "--steps", request.steps.toString(),
-            "--seed", seed.toString(),
-            "--sampling-method", request.sampler,
-            "--scheduler", request.scheduler,
-            "--cfg-scale", cfgText(request.cfgScale),
-        )
-        request.vae?.let { engineArgs += listOf("--vae", it) }
-        if (request.vaeTiling) engineArgs += "--vae-tiling"
-        request.vaeTileSize?.let { engineArgs += listOf("--vae-tile-size", it) }
-        request.vaeTileOverlap?.let { engineArgs += listOf("--vae-tile-overlap", it) }
-        engineArgs += listOf("-o", target.path)
-
+        // VAE tiling is appended only when asked for, so a plain run's engine
+        // command stays byte-for-byte the one ticket 11 documented.
         val code = try {
-            runEngine(engine, engineArgs, out)
+            runEngine(
+                engine,
+                request.choice.engineArgs() +
+                    (if (request.vaeTiling) listOf("--vae-tiling") else emptyList()) +
+                    (request.vaeTileSize?.let { listOf("--vae-tile-size", it) } ?: emptyList()) +
+                    (request.vaeTileOverlap?.let { listOf("--vae-tile-overlap", it) } ?: emptyList()) +
+                    listOf(
+                        "-p", lora.enginePrompt,
+                        "-n", request.negativePrompt,
+                        "-W", request.width.toString(),
+                        "-H", request.height.toString(),
+                        "--steps", request.steps.toString(),
+                        "--seed", seed.toString(),
+                        "--sampling-method", request.sampler,
+                        "--scheduler", request.scheduler,
+                        "--cfg-scale", cfgText(request.cfgScale),
+                    ) + (lora.dir?.let { listOf("--lora-model-dir", it) } ?: emptyList()) +
+                    listOf("-o", target.path),
+                out,
+            )
         } catch (e: IOException) {
             err.append(failure("cannot run engine '$engine': ${e.message}"))
             return Cli.EXIT_FAILURE
@@ -233,7 +304,7 @@ internal object Txt2Img {
 
         // The parameters chunk is written by us, so it is verified by us too: a
         // chunk with a bad CRC32 would turn a good image into an unopenable one.
-        if (!Png.addParameters(target, parameters(request, seed))) {
+        if (!Png.addParameters(target, parameters(request, seed, lora.applied))) {
             err.append(failure("'${target.path}' is not a complete PNG; its parameters could not be recorded"))
             return Cli.EXIT_FAILURE
         }
@@ -254,7 +325,7 @@ internal object Txt2Img {
      * writes ([Png.addParameters]), and the engine's named the checkpoint. A
      * PNG that does not say which weights made it cannot be reproduced.
      */
-    private fun parameters(request: Request, seed: Long): String = buildString {
+    private fun parameters(request: Request, seed: Long, applied: List<LoraSpec.Entry>): String = buildString {
         append(request.prompt)
         append('\n')
         if (request.negativePrompt.isNotEmpty()) {
@@ -266,7 +337,10 @@ internal object Txt2Img {
         append(", CFG scale: ").append(cfgText(request.cfgScale))
         append(", Seed: ").append(seed)
         append(", Size: ").append(request.width).append('x').append(request.height)
-        append(", Model: ").append(File(request.model).name)
+        append(", Model: ").append(File(request.choice.primaryPath).name)
+        if (applied.isNotEmpty()) {
+            append(", Lora: ").append(LoraSpec.format(applied))
+        }
     }
 
     /** `7.0` -> "7", `5.5` -> "5.5": the way every other SD tool writes a CFG scale. */
@@ -281,26 +355,104 @@ internal object Txt2Img {
     }
 
     /**
-     * A path whose extension is not a format this build reads is a mistake in
-     * the command line, not a broken file -- so it exits 2 without opening it.
+     * Reads and validates the header of one model path. Every error names the
+     * option that led here, because "a file is missing" is not an answer when
+     * the command named four of them.
      */
-    private fun requireLoadableModel(path: String) = requireLoadableWeights("--model", path)
-
-    /** Same rule as [requireLoadableModel]: a VAE is weights, not a file name. */
-    private fun requireLoadableVae(path: String) = requireLoadableWeights("--vae", path)
-
-    private fun requireLoadableWeights(option: String, path: String) {
-        if (ModelFile.formatOf(Paths.get(path)) == null) {
-            throw UsageException(
-                "$option '${File(path).name}' is not a model file this build reads " +
-                    "(supported: ${ModelFile.EXTENSIONS.joinToString(", ") { ".$it" }})",
-            )
+    private fun readModel(option: String, path: String): ModelFile.Contents {
+        val file = File(path)
+        if (!file.isFile) throw ModelProblem("'$option' '$path' does not exist or is not a file")
+        if (!file.canRead()) throw ModelProblem("'$option' '$path' is not readable")
+        return try {
+            ModelFile.read(file.toPath())
+        } catch (e: IOException) {
+            throw ModelProblem("'$option' '$path' is not usable: ${e.message}")
         }
     }
 
+    /**
+     * The old error was a dead end ("this build does not implement yet"). Now
+     * that the multi-file pathway exists, a GGUF handed to `-m` must name every
+     * flag the user needs to switch to it -- including the optional vision
+     * encoder Qwen Image requires.
+     */
+    private fun ggufInModelMessage(path: String): String =
+        "model '$path' is a GGUF diffusion model. Load it through the multi-file pathway instead: " +
+            "txt2img --diffusion-model <this GGUF> --llm <text encoder> --vae <vae> " +
+            "[--llm_vision <vision encoder>] --prompt <text> --out <png>; " +
+            "nothing was generated. --model takes a single-file .safetensors checkpoint."
+
+    /**
+     * A path whose extension is not a format this build reads is a mistake in
+     * the command line, not a broken file -- so it exits 2 without opening it.
+     */
+    private fun requireLoadableModels(choice: ModelChoice) {
+        val paths = when (choice) {
+            is ModelChoice.SingleFile ->
+                listOf("--model" to choice.path) + choice.vae?.let { listOf("--vae" to it) }.orEmpty()
+            is ModelChoice.MultiFile ->
+                listOf(
+                    "--diffusion-model" to choice.diffusionModel,
+                    "--llm" to choice.llm,
+                    "--vae" to choice.vae,
+                ) + choice.llmVision?.let { listOf("--llm_vision" to it) }.orEmpty()
+        }
+        for ((option, path) in paths) {
+            if (ModelFile.formatOf(Paths.get(path)) == null) {
+                throw UsageException(
+                    "$option '${File(path).name}' is not a model file this build reads " +
+                        "(supported: ${ModelFile.EXTENSIONS.joinToString(", ") { ".$it" }})",
+                )
+            }
+        }
+    }
+
+    /**
+     * How the weights are spread over files. [SingleFile] is the SD1.5/SDXL
+     * checkpoint that `-m` takes; [MultiFile] is the DiT/GGUF split that the
+     * engine wants as `--diffusion-model` + `--llm` + `--vae`, with an optional
+     * vision encoder for Qwen Image. The split is chosen by the flags, never
+     * guessed from an extension, so a typo is a usage error and not a silently
+     * ignored file.
+     */
+    private sealed class ModelChoice {
+        abstract val primaryPath: String
+        abstract fun engineArgs(): List<String>
+
+        class SingleFile(val path: String, val vae: String?) : ModelChoice() {
+            override val primaryPath: String get() = path
+            override fun engineArgs(): List<String> = buildList {
+                add("-m"); add(path)
+                // An SDXL checkpoint may pair with a standalone VAE; a plain
+                // SD1.5 run sends no VAE flag at all.
+                if (vae != null) { add("--vae"); add(vae) }
+            }
+        }
+
+        class MultiFile(
+            val diffusionModel: String,
+            val llm: String,
+            val vae: String,
+            val llmVision: String?,
+        ) : ModelChoice() {
+            override val primaryPath: String get() = diffusionModel
+            override fun engineArgs(): List<String> = buildList {
+                add("--diffusion-model"); add(diffusionModel)
+                add("--llm"); add(llm)
+                add("--vae"); add(vae)
+                if (llmVision != null) {
+                    add("--llm_vision"); add(llmVision)
+                }
+            }
+        }
+    }
+
+    /** A model path failed a check that is not a command-line mistake: exit 1, not 2. */
+    private class ModelProblem(message: String) : Exception(message)
+
     /** Everything the engine call needs, after the command line has been checked. */
     private class Request(
-        val model: String,
+        val choice: ModelChoice,
         val prompt: String,
         val negativePrompt: String,
         val width: Int,
@@ -313,7 +465,8 @@ internal object Txt2Img {
         val batch: Int,
         val out: String,
         val engine: String?,
-        val vae: String?,
+        val loraEntries: List<LoraSpec.Entry>,
+        val loraDir: String,
         val vaeTiling: Boolean,
         val vaeTileSize: String?,
         val vaeTileOverlap: String?,
@@ -321,10 +474,10 @@ internal object Txt2Img {
 
     private class UsageException(message: String) : Exception(message)
 
-    private fun parse(args: List<String>): Request {
+    private fun parse(args: List<String>, env: Map<String, String>): Request {
         val options = parseOptions(args)
         return Request(
-            model = options.required("model"),
+            choice = parseModelChoice(options),
             prompt = options.required("prompt"),
             out = options.required("out"),
             negativePrompt = options["negative-prompt"] ?: "",
@@ -339,15 +492,109 @@ internal object Txt2Img {
             cfgScale = options.positiveDouble("cfg-scale", DEFAULT_CFG),
             batch = options.intIn("batch", DEFAULT_BATCH, BATCH_RANGE),
             engine = options["engine"],
-            vae = options["vae"],
+            loraEntries = options.loraEntries(),
+            loraDir = options["lora-dir"]?.takeIf { it.isNotBlank() }
+                ?: ModelLibrary.resolve(null, env).resolve("lora").toString(),
             vaeTiling = options.boolean("vae-tiling", false),
             vaeTileSize = options.tileSize("vae-tile-size"),
             vaeTileOverlap = options.fraction("vae-tile-overlap"),
         )
     }
 
+    /**
+     * `--lora` may be repeated or comma-separated. Both spellings go through
+     * the copied [LoraSpec] tokeniser, so `a@0.5,b` and two `--lora` flags mean
+     * the same thing. A multiplier that is not a number is caught here rather
+     * than quietly becoming 1.0 in the tokeniser.
+     */
+    private fun Map<String, String>.loraEntries(): List<LoraSpec.Entry> {
+        val raw = this["lora"]?.trim() ?: return emptyList()
+        if (raw.isEmpty()) throw UsageException("option '--lora' must not be empty")
+        for (piece in raw.split(',')) {
+            val entry = piece.trim()
+            val at = entry.lastIndexOf('@')
+            if (at < 0) continue
+            val text = entry.substring(at + 1).trim()
+            val number = text.toDoubleOrNull()
+                ?: throw UsageException("option '--lora' needs a numeric multiplier, got '$text'")
+            if (!number.isFinite()) {
+                throw UsageException("option '--lora' needs a finite multiplier, got '$text'")
+            }
+        }
+        return LoraSpec.parse(raw)
+    }
+
+    /**
+     * Exactly one model selection: a single file or the multi-file DiT set.
+     * Both at once would send two conflicting model arguments to the engine,
+     * and a half-set (`--llm` with no `--diffusion-model`) would load nothing.
+     */
+    private fun parseModelChoice(options: Map<String, String>): ModelChoice {
+        val single = options["model"]
+        val diffusion = options["diffusion-model"]
+        val multiOnly = listOf("llm", "llm_vision")
+        when {
+            single != null && diffusion != null -> throw UsageException(
+                "--model and --diffusion-model are mutually exclusive: use --model for a single-file " +
+                    "checkpoint, or --diffusion-model with --llm and --vae for a multi-file DiT/GGUF model",
+            )
+            single != null -> {
+                val stray = multiOnly.firstOrNull { it in options }
+                if (stray != null) {
+                    throw UsageException("'--$stray' belongs to the multi-file pathway and cannot be used with '--model'")
+                }
+                // --vae is legal here: an SDXL checkpoint can bring its own VAE.
+                return ModelChoice.SingleFile(
+                    options.required("model"),
+                    options["vae"]?.takeIf { it.isNotBlank() },
+                )
+            }
+            diffusion != null -> {
+                val missing = listOf("llm", "vae").filter { it !in options }
+                if (missing.isNotEmpty()) {
+                    throw UsageException(
+                        "multi-file models need ${missing.joinToString(" and ") { "'--$it'" }} " +
+                            "alongside '--diffusion-model'",
+                    )
+                }
+                return ModelChoice.MultiFile(
+                    diffusionModel = options.required("diffusion-model"),
+                    llm = options.required("llm"),
+                    vae = options.required("vae"),
+                    llmVision = options.nonBlankValue("llm_vision"),
+                )
+            }
+            else -> {
+                val stray = multiOnly.firstOrNull { it in options }
+                if (stray != null) throw UsageException("'--$stray' requires '--diffusion-model'")
+                // Keep --model first in the message: scripts and older docs
+                // know it, and the alternative must be discoverable here.
+                throw UsageException(
+                    "missing required option '--model' (or '--diffusion-model' with '--llm' and '--vae' " +
+                        "for a multi-file DiT/GGUF model)",
+                )
+            }
+        }
+    }
+
+    private fun Map<String, String>.nonBlankValue(name: String): String? {
+        val value = this[name] ?: return null
+        if (value.isBlank()) throw UsageException("option '--$name' must not be empty")
+        return value
+    }
+
     private fun parseOptions(args: List<String>): Map<String, String> {
         val options = LinkedHashMap<String, String>()
+        fun put(name: String, value: String) {
+            // Every other repeated flag is last-wins; --lora is a list, so
+            // joining with the same comma the mobile LoraSpec uses keeps one
+            // tokeniser for both spellings.
+            options[name] = if (name == "lora" && options.containsKey(name)) {
+                "${options[name]},$value"
+            } else {
+                value
+            }
+        }
         var i = 0
         while (i < args.size) {
             val token = args[i]
@@ -359,18 +606,18 @@ internal object Txt2Img {
             if (equals >= 0) {
                 val name = body.substring(0, equals)
                 requireKnown(name)
-                options[name] = body.substring(equals + 1)
+                put(name, body.substring(equals + 1))
                 i += 1
             } else {
                 requireKnown(body)
                 if (body in FLAG_OPTIONS) {
-                    options[body] = "true"
+                    put(body, "true")
                     i += 1
                 } else {
                     if (i + 1 >= args.size) {
                         throw UsageException("option '--$body' needs a value")
                     }
-                    options[body] = args[i + 1]
+                    put(body, args[i + 1])
                     i += 2
                 }
             }
