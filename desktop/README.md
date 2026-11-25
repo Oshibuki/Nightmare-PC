@@ -42,6 +42,87 @@ Useful narrower commands:
 | compile the GUI | `timeout 900 ./gradlew --no-daemon :gui:classes 2>&1 \| tee /tmp/gui-classes.log` |
 | launch the GUI window | `timeout 300 xvfb-run -a ./gradlew --no-daemon :gui:run 2>&1 \| tee /tmp/gui-run.log` |
 
+## Phase 2 acceptance: one command (Linux)
+
+`verify-gui.sh` is the single acceptance entry point (ADR-0011). It runs every
+step under a hard timeout and appends each step's stdout+stderr to its own log;
+the first non-zero exit stops the run, keeps all logs, and makes the script exit
+non-zero. A green run ends with `verify-gui: PASS`.
+
+```bash
+export JAVA_HOME=/home/chjlxxc/Android/jdk-17
+cd desktop
+timeout 2400 ./verify-gui.sh 2>&1 | tee /tmp/verify-gui-run.log
+```
+
+What it checks, in order:
+
+| Step | Command | Log in `/tmp` | Timeout |
+| --- | --- | --- | --- |
+| GUI compile | `:gui:classes` | `verify-gui-classes.log` | 900 s |
+| Full build | `build` (all JVM tests) | `verify-gui-build.log` | 900 s |
+| Fake CLI runner E2E | `:gui:test` with `WorkflowRunnerTest`, `ToolInterfaceTest`, `DefaultModeStateTest`, `AdvancedModeStateTest` | `verify-gui-fake-runner.log` | 600 s |
+| Workflow persistence | `:core:test` with `WorkflowPersistenceTest` | `verify-gui-persistence.log` | 600 s |
+| Real SD1.5 smoke | `:cli:test` with `Img2ImgRealE2ETest` | `verify-gui-real-smoke.log` | 1800 s |
+| GUI launch (opt-in) | `:gui:run` | `verify-gui-launch.log` | 60 s |
+
+The `--tests` filters are assertions too: Gradle fails a filter that matches no
+test, and any failed test gives a non-zero exit. Logs live in
+`VERIFY_GUI_LOG_DIR` (default `/tmp`). Overrides:
+
+| Variable | Meaning |
+| --- | --- |
+| `VERIFY_GUI_GRADLE` | Gradle launcher, default `./gradlew` |
+| `VERIFY_GUI_LOG_DIR` | log directory, default `/tmp` |
+| `VERIFY_GUI_SMOKE_TIMEOUT` | real-smoke seconds, default 1800 |
+| `NIGHTMARE_MODELS` | model cache root, default `~/.cache/nightmare-desktop/models` |
+| `NIGHTMARE_SD_BIN` | engine binary, default `~/.cache/nightmare-desktop/engine/sd-cli` |
+
+The real smoke is optional. If
+`$NIGHTMARE_MODELS/sd15/v1-5-pruned-emaonly.safetensors` is absent the script
+writes `已跳过（无权重缓存）` to the smoke log and exits 0; a missing engine gives
+`已跳过（无引擎二进制）`. Neither blocks acceptance — the fake runner carries the
+contract without external downloads. With both present the CLI test really runs
+the cached weights and reports its timings.
+
+Graphics are opt-in: `VERIFY_GUI_LAUNCH=1` adds the `:gui:run` step. It uses an
+existing `DISPLAY` as-is, wraps with `xvfb-run -a` on a headless machine that
+has Xvfb, and logs `已跳过（无显示且无 xvfb-run）` when neither exists. The reference
+machine has `DISPLAY=:0` and no Xvfb binary, so no wrapper is needed there:
+
+```bash
+DISPLAY=:0 VERIFY_GUI_LAUNCH=1 timeout 2400 ./verify-gui.sh 2>&1 | tee /tmp/verify-gui-launch-run.log
+```
+
+The script's own shell assertions are bounded and need no Gradle:
+
+```bash
+timeout 120 bash verify-gui.test.sh 2>&1 | tee /tmp/verify-gui-test.log
+```
+
+### Windows and macOS: compile only
+
+Only the GUI module's local compile is required on those platforms (spec User
+Story 40, ADR-0011). Compilation needs no display and no weights:
+
+```bat
+:: Windows (PowerShell or cmd, from desktop\)
+.\gradlew.bat --no-daemon :gui:classes
+```
+
+```bash
+# macOS (and Linux), from desktop/
+./gradlew --no-daemon :gui:classes
+```
+
+That is the whole cross-platform boundary for this phase: no smoke, no GUI
+launch and no Windows/macOS CI job. The fake CLI runner tests use a POSIX shell
+script and are skipped on Windows by `Assume`; they are not a substitute for a
+Windows GUI run. The existing `.github/workflows/desktop.yml` keeps its single
+Linux `build` job and its failure-time upload of `desktop/*/build/reports/tests/`;
+the verification script is a local/agent entry point and CI was deliberately
+left unchanged.
+
 ## Desktop GUI (Phase 2 skeleton)
 
 `:gui` is an independent Compose Desktop application that stays a JVM project:
