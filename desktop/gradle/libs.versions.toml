@@ -9,9 +9,12 @@
 nightmare = "0.1.0"
 kotlin = "2.4.21"
 junit = "4.13.2"
+json = "20250517"
 
 [libraries]
 junit = { module = "junit:junit", version.ref = "junit" }
+# The JVM artifact replaces Android's bundled org.json for the copied API layer.
+json = { module = "org.json:json", version.ref = "json" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
