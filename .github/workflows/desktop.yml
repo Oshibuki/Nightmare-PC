@@ -1,0 +1,175 @@
+# Linux CI for the desktop build (Phase 0, ticket 10).
+#
+# WHY TWO JOBS AND NOT ONE
+# The Kotlin layer (`desktop/core`, `desktop/cli`) is what every desktop change
+# touches, and it builds in seconds. The vendored C++ engine is a 2+ minute
+# cmake build of stable-diffusion.cpp plus ggml that almost no commit changes,
+# so it is an opt-in job: a PR must not pay for it, but a manual dispatch must
+# still be able to prove the pinned engine still compiles.
+#
+# WHAT IS NOT HERE
+# Vulkan. `desktop/engine/build.sh --vulkan` needs the Vulkan SDK and
+# SPIRV-Headers, and ggml-vulkan's CMakeLists does not propagate the
+# SPIRV-Headers include directory (see desktop/engine/README.md). The Linux
+# Vulkan build is verified locally, not on a runner, so this workflow only
+# builds the CPU backend — the one the E2E run actually points at
+# (`NIGHTMARE_SD_BIN`).
+#
+# WHY `backend-patches/**` IS A TRIGGER PATH
+# A desktop test reads the patch inventory under `backend-patches/`, so a patch
+# landing there can break the Kotlin build without touching `desktop/`.
+name: desktop
+
+on:
+  push:
+    paths:
+      - "desktop/**"
+      - "backend-patches/**"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "backend-patches/**"
+      - ".github/workflows/desktop.yml"
+  # The engine job below only runs here; the Kotlin job also runs on a manual
+  # dispatch, which is what makes "did I break the build?" answerable without a
+  # commit.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the older run pointless. Engine runs are
+# expensive, so cancelling them matters more than a strict history of every push.
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Kotlin layer (build + all JVM tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # submodules: false on purpose. The engine's C++ sources are a submodule
+      # and this job never compiles them; fetching them would add a few hundred
+      # MB and a network dependency for nothing. `desktop/build.gradle.kts`
+      # does not reference `engine/`.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Gradle itself, not just the dependencies: without the wrapper
+      # distribution cached, a cold run re-downloads ~130 MB. The key follows
+      # the wrapper version and the build scripts, so a dependency or version
+      # change gets a fresh cache instead of a stale one.
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('desktop/gradle/wrapper/gradle-wrapper.properties', 'desktop/gradle/libs.versions.toml', 'desktop/**/*.gradle.kts') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      # The same command `desktop/README.md` documents, run from `desktop/`:
+      # `build` compiles both modules and runs every JVM test. No JAVA_HOME
+      # export is needed here — setup-java exports it.
+      - name: Build and test
+        working-directory: desktop
+        timeout-minutes: 15
+        run: ./gradlew --no-daemon build
+
+      # A red test run is only useful if the report survives the runner.
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-test-reports
+          path: desktop/*/build/reports/tests/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  engine:
+    name: Engine (CPU, pinned sources)
+    # Opt-in only: a PR gets the fast Kotlin job, and the C++ build is a manual
+    # dispatch. `if:` is what enforces that — `on.workflow_dispatch` alone would
+    # still let this job run on push/PR.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # recursive: build.sh refuses to run without the sdcpp sources, and sdcpp
+      # has its own ggml submodule. The SHAs come from the pinned gitlinks, so
+      # this is the same tree desktop/engine/ENGINES.md records.
+      - name: Checkout (with engine sources)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Show pinned engine SHAs
+        run: |
+          echo "sdcpp: $(git -C desktop/engine/sdcpp rev-parse HEAD)"
+          echo "ggml:  $(git -C desktop/engine/sdcpp/ggml rev-parse HEAD)"
+
+      # Keyed on the pinned sdcpp SHA AND the build script's own hash: a cache
+      # keyed on the SHA alone would be reused after a flag change in build.sh
+      # and would hand back a binary built with the old flags.
+      - name: Cache engine build tree
+        uses: actions/cache@v4
+        with:
+          path: desktop/engine/build
+          key: engine-cpu-${{ runner.os }}-35a3d48b23581d2be7c3ad95e92f34662bb5f305-${{ hashFiles('desktop/engine/build.sh') }}
+          restore-keys: |
+            engine-cpu-${{ runner.os }}-35a3d48b23581d2be7c3ad95e92f34662bb5f305-
+
+      # A restored cache carries the absolute paths of the runner that created
+      # it. If those ever differ (the repo is renamed, so the workspace path
+      # changes), cmake refuses the tree with "The current CMakeCache.txt
+      # directory ... is different than the directory ... where it was created",
+      # and because a cache entry is immutable under its key, that failure
+      # repeats on every run until someone clears the cache by hand. Discarding
+      # the tree costs one reconfigure; the trap costs an afternoon.
+      - name: Discard a cached build tree configured under other paths
+        run: |
+          set -euo pipefail
+          cache=desktop/engine/build/CMakeCache.txt
+          [ -f "$cache" ] || exit 0
+          expected="$(pwd)/desktop/engine/sdcpp"
+          if ! grep -qxF "CMAKE_HOME_DIRECTORY:INTERNAL=$expected" "$cache"; then
+            echo "cached tree was configured for another source path; discarding it"
+            grep -F "CMAKE_HOME_DIRECTORY:INTERNAL=" "$cache" || true
+            echo "expected: CMAKE_HOME_DIRECTORY:INTERNAL=$expected"
+            rm -rf desktop/engine/build
+          fi
+
+      # build.sh is the only supported entry point: it forces GGML_HEXAGON=OFF
+      # at configure time (ADR-0005), prints the live SHAs next to the pins, and
+      # fails if the artifact is missing. `set -euo pipefail` inside it means a
+      # cmake error fails this step — nothing is swallowed.
+      # --no-publish: the shared ~/.cache engine copy is a local-machine
+      # convenience; the artifact below is what CI produces.
+      - name: Build engine (CPU)
+        run: |
+          set -euo pipefail
+          desktop/engine/build.sh --jobs "$(nproc)" --no-publish
+          desktop/engine/build/bin/sd-cli --version
+
+      - name: Upload sd-cli
+        uses: actions/upload-artifact@v4
+        with:
+          name: sd-cli-linux-x86_64
+          path: desktop/engine/build/bin/sd-cli
+          # A build that "succeeded" but produced no binary must not look green.
+          if-no-files-found: error
+          retention-days: 7
