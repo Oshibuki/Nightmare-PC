@@ -15,6 +15,9 @@ Android plugin.
   ```
 
 - Gradle comes from the wrapper (`gradle-8.14.4`), no separate install.
+- Running the GUI needs a graphical display. On a headless machine install Xvfb
+  and prefix the run command with `xvfb-run -a`; the reference machine has
+  `DISPLAY=:0` and no Xvfb binary. Compilation needs no display.
 
 ## Build and test in one command
 
@@ -24,8 +27,8 @@ cd desktop
 timeout 900 ./gradlew --no-daemon build 2>&1 | tee /tmp/desktop-build.log
 ```
 
-`build` compiles both modules and runs every JVM test. A green run ends with
-`BUILD SUCCESSFUL`; test results are also written to
+`build` compiles `:core`, `:cli` and `:gui` and runs every JVM test. A green run
+ends with `BUILD SUCCESSFUL`; test results are also written to
 `core/build/reports/tests/test/index.html` and `cli/build/reports/tests/test/index.html`.
 
 Useful narrower commands:
@@ -33,9 +36,41 @@ Useful narrower commands:
 | Goal | Command |
 | --- | --- |
 | tests only | `./gradlew --no-daemon test` |
-| list projects | `./gradlew --no-daemon projects` (expects only `:core` and `:cli`) |
+| list projects | `./gradlew --no-daemon projects` (expects `:core`, `:cli` and `:gui`) |
 | dependency tree | `./gradlew --no-daemon :cli:dependencies --configuration runtimeClasspath` |
 | run the CLI without packaging | `./gradlew --no-daemon :cli:run --args='--help'` |
+| compile the GUI | `timeout 900 ./gradlew --no-daemon :gui:classes 2>&1 \| tee /tmp/gui-classes.log` |
+| launch the GUI window | `timeout 300 xvfb-run -a ./gradlew --no-daemon :gui:run 2>&1 \| tee /tmp/gui-run.log` |
+
+## Desktop GUI (Phase 2 skeleton)
+
+`:gui` is an independent Compose Desktop application that stays a JVM project:
+it applies `org.jetbrains.kotlin.jvm`, `org.jetbrains.kotlin.plugin.compose`
+(version locked to Kotlin 2.4.21) and `org.jetbrains.compose` (1.12.2), with no
+Android plugin or target. Versions live in `gradle/libs.versions.toml`; the
+central repository list includes Google Maven only for Compose's generic
+`androidx.*` artifacts, while module scripts still may not declare repositories.
+
+With `JAVA_HOME` exported as above and the working directory `desktop/`:
+
+```bash
+timeout 900 ./gradlew --no-daemon :gui:classes 2>&1 | tee /tmp/gui-classes.log
+timeout 300 xvfb-run -a ./gradlew --no-daemon :gui:run 2>&1 | tee /tmp/gui-run.log
+```
+
+The entry point is `com.abrah.nightmare.desktop.gui.MainKt`; `:gui:run` opens an
+empty window titled `Nightmare Desktop`. Both commands are bounded and keep a
+log on failure. Drop `xvfb-run -a` when a display is already available; on a
+headless machine without Xvfb, startup cannot be verified here.
+
+### Locating the CLI executable
+
+The GUI will drive the CLI as a child process, not call it in-process. Build the
+runnable script with `./gradlew --no-daemon :cli:installDist`; the executable is
+`cli/build/install/nightmare-desktop/bin/nightmare-desktop` (absolute path:
+`<desktop>/cli/build/install/nightmare-desktop/bin/nightmare-desktop`). This
+skeleton does not launch it yet. Do not confuse it with `--engine` /
+`NIGHTMARE_SD_BIN`, which locate the C++ inference binary instead.
 
 ## Smoke test: one command to a PNG
 
@@ -243,14 +278,15 @@ string users see.
 
 | Path | Responsibility |
 | --- | --- |
-| `cli/` | `:cli` — entry point, argument handling, exit codes |
+| `cli/` | `:cli` — headless entry point, argument handling, exit codes |
 | `core/` | `:core` — platform-independent logic copied from the Android app |
+| `gui/` | `:gui` — Compose Desktop shell, currently an empty window |
 | `engine/` | vendored C++ inference engine, built outside Gradle |
 | `docs/` | desktop-only documentation |
 
-The engine and GUI phases are not built by Gradle. `engine/` is built by its own
-script (see its README) and Gradle only depends on the resulting binary path;
-the GUI arrives in Phase 2.
+The engine is not built by Gradle: `engine/` has its own script (see its README)
+and Gradle only depends on the resulting binary path. The GUI is a normal Gradle
+module (`:gui`) with a Compose Desktop entry point.
 
 ## Boundaries
 

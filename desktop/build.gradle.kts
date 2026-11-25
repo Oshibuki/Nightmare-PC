@@ -1,8 +1,10 @@
-// Root of the Nightmare Desktop build. It applies nothing to itself: the two
-// JVM modules own their own plugins, so a broken :cli cannot stop :core from
+// Root of the Nightmare Desktop build. It applies nothing to itself: each JVM
+// module owns its plugins, so a broken :cli cannot stop :core or :gui from
 // compiling and neither can leak Android plugins into this build.
 plugins {
     alias(libs.plugins.kotlin.jvm) apply false
+    alias(libs.plugins.compose.compiler) apply false
+    alias(libs.plugins.jetbrains.compose) apply false
 }
 
 // Product coordinates in one place. `version` feeds :core's generated
