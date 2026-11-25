@@ -52,6 +52,7 @@ catalogue (ticket 13). The Phase 0 CLI does not read it — scripts should pass
 | source | <https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5> |
 | download | `https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors` |
 | size | 4,265,146,304 bytes (≈ 4.0 GiB) |
+| sha256 | `6ce0161689b3853acaa03779ec93eafe75a02f4ced659bee03f50797806fa2fa` |
 | licence | CreativeML Open RAIL-M — read it before redistributing anything generated from it |
 
 ```bash
@@ -68,7 +69,12 @@ curl -L --fail --continue-at - \
 
 ```bash
 ls -l "$MODELS/sd15/v1-5-pruned-emaonly.safetensors"   # expect 4265146304 bytes
+sha256sum "$MODELS/sd15/v1-5-pruned-emaonly.safetensors"
+# 6ce0161689b3853acaa03779ec93eafe75a02f4ced659bee03f50797806fa2fa
 ```
+
+The checksum is the one measured on the copy this machine's smoke run used; a
+mismatch means a different revision, not a corrupt engine.
 
 The file is a plain single-file SD1.5 checkpoint — the `.safetensors` the engine
 reads directly. Quantised GGUF checkpoints and the SDXL / DiT families (which
