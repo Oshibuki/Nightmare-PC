@@ -107,6 +107,42 @@ that is not the PNG it claims to be), `2` the command line itself was wrong
 | `--batch` | 1 | 1–16 |
 | `--engine` | `$NIGHTMARE_SD_BIN`, then `desktop/engine/build/bin/sd-cli` | a path |
 
+### Multi-file DiT / GGUF models
+
+Z-Image, FLUX.2 Klein and Qwen Image ship as a diffusion model plus a separate
+text encoder and VAE: the engine's `-m` cannot load that set as one checkpoint.
+Use the multi-file pathway instead (`--model` with a `.gguf` is refused with a
+message pointing here):
+
+```bash
+M="${NIGHTMARE_MODELS:-$HOME/.cache/nightmare-desktop/models}"
+nightmare-desktop txt2img \
+  --diffusion-model "$M/z-image/diffusion_model.gguf" \
+  --llm "$M/z-image/llm.gguf" \
+  --vae "$M/flux/ae.safetensors" \
+  --prompt "a red fox" --out /tmp/nm-zimage.png \
+  --cfg-scale 1 --steps 20 --width 1024 --height 1024 --scheduler sgm_uniform
+```
+
+Qwen Image 2.1 additionally needs the vision encoder:
+
+```bash
+nightmare-desktop txt2img \
+  --diffusion-model "$M/qwen-image/diffusion_model.gguf" \
+  --llm "$M/qwen-image/llm.gguf" \
+  --vae "$M/qwen-image/vae.safetensors" \
+  --llm_vision "$M/qwen-image/mmproj.gguf" \
+  --prompt "a red fox" --out /tmp/nm-qwen.png --cfg-scale 1 --steps 20
+```
+
+`--diffusion-model`, `--llm` and `--vae` are required together and mutually
+exclusive with `--model`; `--llm_vision` is optional. All four paths are checked
+for existence and a valid header before the engine starts, and an error names
+the option whose file is wrong. Everything else — seed, batch, samplers,
+progress lines and the `parameters` chunk — behaves exactly as in single-file
+mode. The real, weight-backed smoke tests for these families are tickets
+19–21; they build on this pathway.
+
 The engine is resolved from `--engine`, then `NIGHTMARE_SD_BIN`, then
 `desktop/engine/build/bin/sd-cli`; it runs as a child process with its output
 forwarded, so a crash cannot take the CLI down with it.

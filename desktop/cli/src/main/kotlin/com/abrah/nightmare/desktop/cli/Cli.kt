@@ -67,6 +67,7 @@ object Cli {
         |Usage:
         |  ${ProductIdentity.NAME} <option>
         |  ${ProductIdentity.NAME} txt2img --model <path> --prompt <text> --out <path> [options]
+        |  ${ProductIdentity.NAME} txt2img --diffusion-model <gguf> --llm <gguf> --vae <file> --prompt <text> --out <path> [options]
         |  ${ProductIdentity.NAME} models list [--dir <path>]
         |  ${ProductIdentity.NAME} serve --model <path> [--port <1-65535>]
         |
@@ -80,9 +81,19 @@ object Cli {
         |  serve          Run the engine's A1111-compatible local HTTP API.
         |
         |txt2img options:
-        |      --model <path>              Model file to load (required). A single-file
+        |      --model <path>              Model file to load. A single-file
         |                                  .safetensors checkpoint; its header is checked
-        |                                  before the engine starts.
+        |                                  before the engine starts. Required unless the
+        |                                  multi-file options below are used.
+        |      --diffusion-model <path>    Standalone diffusion model of a multi-file
+        |                                  DiT/GGUF pipeline. Requires --llm and --vae,
+        |                                  and is mutually exclusive with --model.
+        |      --llm <path>                Text encoder of that pipeline (required with
+        |                                  --diffusion-model).
+        |      --vae <path>                VAE decoder of that pipeline (required with
+        |                                  --diffusion-model); .safetensors or .gguf.
+        |      --llm_vision <path>         Vision encoder of that pipeline, e.g. the
+        |                                  mmproj of Qwen Image (optional).
         |      --prompt <text>             Prompt to render (required).
         |      --out <path>                PNG file to write (required). With
         |                                  --batch, the first image is written

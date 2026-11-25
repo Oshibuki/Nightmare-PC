@@ -28,6 +28,10 @@ import kotlin.random.Random
  * - **The metadata.** The engine writes pixels; the CLI writes the A1111-style
  *   `parameters` chunk beside them, because a batch of PNGs with no record of
  *   the seed and sampler that made them cannot be reproduced.
+ * - **The model split.** `--model` is one self-contained checkpoint; the DiT
+ *   families use `--diffusion-model` with `--llm` and `--vae`, plus `--llm_vision`
+ *   for Qwen Image. Both selections are checked before the engine starts, so a
+ *   missing file costs a second rather than a model load.
  *
  * ⚠ `--model` is also checked against its own header before the engine starts
  * (see [ModelFile]): a half-downloaded checkpoint otherwise costs minutes of
@@ -70,45 +74,42 @@ internal object Txt2Img {
     private const val RANDOM_SEED = -1L
 
     private val KNOWN_OPTIONS = setOf(
-        "model", "prompt", "negative-prompt", "width", "height",
+        "model", "diffusion-model", "llm", "vae", "llm_vision",
+        "prompt", "negative-prompt", "width", "height",
         "steps", "sampler", "scheduler", "cfg-scale", "seed", "batch", "out", "engine",
     )
 
     fun run(args: List<String>, out: Appendable, err: Appendable, env: Map<String, String>): Int {
         val request = try {
-            parse(args).also { requireLoadableModel(it.model) }
+            parse(args).also { requireLoadableModels(it.choice) }
         } catch (e: UsageException) {
             err.append(usageError(e.message ?: "bad arguments"))
             return Cli.EXIT_USAGE
         }
 
         // Check what we can check ourselves before paying for a model load: a
-        // typo in --model must not cost ten minutes of engine start-up.
-        val model = File(request.model)
-        if (!model.isFile) {
-            err.append(failure("model '${request.model}' does not exist or is not a file"))
-            return Cli.EXIT_FAILURE
-        }
-        if (!model.canRead()) {
-            err.append(failure("model '${request.model}' is not readable"))
-            return Cli.EXIT_FAILURE
-        }
-        // The name is a claim; the header is the evidence. Refuse a GGUF here:
-        // sd-cli's -m is a single-file checkpoint, so a DiT GGUF there renders noise.
-        val contents = try {
-            ModelFile.read(model.toPath())
-        } catch (e: IOException) {
-            err.append(failure("model '${request.model}' is not usable: ${e.message}"))
-            return Cli.EXIT_FAILURE
-        }
-        if (contents is ModelFile.Contents.Gguf) {
-            err.append(
-                failure(
-                    "model '${request.model}' is a GGUF diffusion model. Those are loaded with " +
-                        "--diffusion-model (plus --llm and --vae), which this build does not implement yet; " +
-                        "nothing was generated. Pass a single-file .safetensors checkpoint to --model.",
-                ),
-            )
+        // typo in any of the four paths must not cost ten minutes of engine
+        // start-up. Every error names the option, so a multi-file command says
+        // which of its files is wrong instead of just "model missing".
+        try {
+            when (val choice = request.choice) {
+                is ModelChoice.SingleFile -> {
+                    // The name is a claim; the header is the evidence. Refuse a
+                    // GGUF here: sd-cli's -m is a single-file checkpoint, so a
+                    // DiT GGUF there renders noise.
+                    if (readModel("--model", choice.path) is ModelFile.Contents.Gguf) {
+                        throw ModelProblem(ggufInModelMessage(choice.path))
+                    }
+                }
+                is ModelChoice.MultiFile -> {
+                    readModel("--diffusion-model", choice.diffusionModel)
+                    readModel("--llm", choice.llm)
+                    readModel("--vae", choice.vae)
+                    choice.llmVision?.let { readModel("--llm_vision", it) }
+                }
+            }
+        } catch (e: ModelProblem) {
+            err.append(failure(e.message ?: "bad model"))
             return Cli.EXIT_FAILURE
         }
         val engine = File(request.engine ?: env[ENV_ENGINE] ?: DEFAULT_ENGINE)
@@ -164,8 +165,7 @@ internal object Txt2Img {
         val code = try {
             runEngine(
                 engine,
-                listOf(
-                    "-m", request.model,
+                request.choice.engineArgs() + listOf(
                     "-p", request.prompt,
                     "-n", request.negativePrompt,
                     "-W", request.width.toString(),
@@ -242,7 +242,7 @@ internal object Txt2Img {
         append(", CFG scale: ").append(cfgText(request.cfgScale))
         append(", Seed: ").append(seed)
         append(", Size: ").append(request.width).append('x').append(request.height)
-        append(", Model: ").append(File(request.model).name)
+        append(", Model: ").append(File(request.choice.primaryPath).name)
     }
 
     /** `7.0` -> "7", `5.5` -> "5.5": the way every other SD tool writes a CFG scale. */
@@ -257,21 +257,98 @@ internal object Txt2Img {
     }
 
     /**
-     * A path whose extension is not a format this build reads is a mistake in
-     * the command line, not a broken file -- so it exits 2 without opening it.
+     * Reads and validates the header of one model path. Every error names the
+     * option that led here, because "a file is missing" is not an answer when
+     * the command named four of them.
      */
-    private fun requireLoadableModel(path: String) {
-        if (ModelFile.formatOf(Paths.get(path)) == null) {
-            throw UsageException(
-                "--model '${File(path).name}' is not a model file this build reads " +
-                    "(supported: ${ModelFile.EXTENSIONS.joinToString(", ") { ".$it" }})",
-            )
+    private fun readModel(option: String, path: String): ModelFile.Contents {
+        val file = File(path)
+        if (!file.isFile) throw ModelProblem("'$option' '$path' does not exist or is not a file")
+        if (!file.canRead()) throw ModelProblem("'$option' '$path' is not readable")
+        return try {
+            ModelFile.read(file.toPath())
+        } catch (e: IOException) {
+            throw ModelProblem("'$option' '$path' is not usable: ${e.message}")
         }
     }
 
+    /**
+     * The old error was a dead end ("this build does not implement yet"). Now
+     * that the multi-file pathway exists, a GGUF handed to `-m` must name every
+     * flag the user needs to switch to it -- including the optional vision
+     * encoder Qwen Image requires.
+     */
+    private fun ggufInModelMessage(path: String): String =
+        "model '$path' is a GGUF diffusion model. Load it through the multi-file pathway instead: " +
+            "txt2img --diffusion-model <this GGUF> --llm <text encoder> --vae <vae> " +
+            "[--llm_vision <vision encoder>] --prompt <text> --out <png>; " +
+            "nothing was generated. --model takes a single-file .safetensors checkpoint."
+
+    /**
+     * A path whose extension is not a format this build reads is a mistake in
+     * the command line, not a broken file -- so it exits 2 without opening it.
+     */
+    private fun requireLoadableModels(choice: ModelChoice) {
+        val paths = when (choice) {
+            is ModelChoice.SingleFile -> listOf("--model" to choice.path)
+            is ModelChoice.MultiFile ->
+                listOf(
+                    "--diffusion-model" to choice.diffusionModel,
+                    "--llm" to choice.llm,
+                    "--vae" to choice.vae,
+                ) + choice.llmVision?.let { listOf("--llm_vision" to it) }.orEmpty()
+        }
+        for ((option, path) in paths) {
+            if (ModelFile.formatOf(Paths.get(path)) == null) {
+                throw UsageException(
+                    "$option '${File(path).name}' is not a model file this build reads " +
+                        "(supported: ${ModelFile.EXTENSIONS.joinToString(", ") { ".$it" }})",
+                )
+            }
+        }
+    }
+
+    /**
+     * How the weights are spread over files. [SingleFile] is the SD1.5/SDXL
+     * checkpoint that `-m` takes; [MultiFile] is the DiT/GGUF split that the
+     * engine wants as `--diffusion-model` + `--llm` + `--vae`, with an optional
+     * vision encoder for Qwen Image. The split is chosen by the flags, never
+     * guessed from an extension, so a typo is a usage error and not a silently
+     * ignored file.
+     */
+    private sealed class ModelChoice {
+        abstract val primaryPath: String
+        abstract fun engineArgs(): List<String>
+
+        class SingleFile(val path: String) : ModelChoice() {
+            override val primaryPath: String get() = path
+            override fun engineArgs(): List<String> = listOf("-m", path)
+        }
+
+        class MultiFile(
+            val diffusionModel: String,
+            val llm: String,
+            val vae: String,
+            val llmVision: String?,
+        ) : ModelChoice() {
+            override val primaryPath: String get() = diffusionModel
+            override fun engineArgs(): List<String> = buildList {
+                add("--diffusion-model"); add(diffusionModel)
+                add("--llm"); add(llm)
+                add("--vae"); add(vae)
+                if (llmVision != null) {
+                    add("--llm_vision"); add(llmVision)
+                }
+            }
+        }
+    }
+
+    /** A model path failed a check that is not a command-line mistake: exit 1, not 2. */
+    private class ModelProblem(message: String) : Exception(message)
+
     /** Everything the engine call needs, after the command line has been checked. */
     private class Request(
-        val model: String,
+        val choice: ModelChoice,
         val prompt: String,
         val negativePrompt: String,
         val width: Int,
@@ -291,7 +368,7 @@ internal object Txt2Img {
     private fun parse(args: List<String>): Request {
         val options = parseOptions(args)
         return Request(
-            model = options.required("model"),
+            choice = parseModelChoice(options),
             prompt = options.required("prompt"),
             out = options.required("out"),
             negativePrompt = options["negative-prompt"] ?: "",
@@ -307,6 +384,61 @@ internal object Txt2Img {
             batch = options.intIn("batch", DEFAULT_BATCH, BATCH_RANGE),
             engine = options["engine"],
         )
+    }
+
+    /**
+     * Exactly one model selection: a single file or the multi-file DiT set.
+     * Both at once would send two conflicting model arguments to the engine,
+     * and a half-set (`--llm` with no `--diffusion-model`) would load nothing.
+     */
+    private fun parseModelChoice(options: Map<String, String>): ModelChoice {
+        val single = options["model"]
+        val diffusion = options["diffusion-model"]
+        val multiOnly = listOf("llm", "vae", "llm_vision")
+        when {
+            single != null && diffusion != null -> throw UsageException(
+                "--model and --diffusion-model are mutually exclusive: use --model for a single-file " +
+                    "checkpoint, or --diffusion-model with --llm and --vae for a multi-file DiT/GGUF model",
+            )
+            single != null -> {
+                val stray = multiOnly.firstOrNull { it in options }
+                if (stray != null) {
+                    throw UsageException("'--$stray' belongs to the multi-file pathway and cannot be used with '--model'")
+                }
+                return ModelChoice.SingleFile(options.required("model"))
+            }
+            diffusion != null -> {
+                val missing = listOf("llm", "vae").filter { it !in options }
+                if (missing.isNotEmpty()) {
+                    throw UsageException(
+                        "multi-file models need ${missing.joinToString(" and ") { "'--$it'" }} " +
+                            "alongside '--diffusion-model'",
+                    )
+                }
+                return ModelChoice.MultiFile(
+                    diffusionModel = options.required("diffusion-model"),
+                    llm = options.required("llm"),
+                    vae = options.required("vae"),
+                    llmVision = options.nonBlankValue("llm_vision"),
+                )
+            }
+            else -> {
+                val stray = multiOnly.firstOrNull { it in options }
+                if (stray != null) throw UsageException("'--$stray' requires '--diffusion-model'")
+                // Keep --model first in the message: scripts and older docs
+                // know it, and the alternative must be discoverable here.
+                throw UsageException(
+                    "missing required option '--model' (or '--diffusion-model' with '--llm' and '--vae' " +
+                        "for a multi-file DiT/GGUF model)",
+                )
+            }
+        }
+    }
+
+    private fun Map<String, String>.nonBlankValue(name: String): String? {
+        val value = this[name] ?: return null
+        if (value.isBlank()) throw UsageException("option '--$name' must not be empty")
+        return value
     }
 
     private fun parseOptions(args: List<String>): Map<String, String> {
