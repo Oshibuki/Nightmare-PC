@@ -50,11 +50,9 @@ fun DefaultModeScreen(
     var revision by remember { mutableIntStateOf(0) }
     DisposableEffect(state) {
         val unsubscribe = state.addChangeListener { revision++ }
-        onDispose {
-            unsubscribe()
-            // Window close must not leave a background CLI behind (ADR-0009).
-            WorkflowRunner.cancelActiveProcess(state.runHandle())
-        }
+        // A mode switch disposes this effect; the window-level effect in Main
+        // owns CLI cleanup so the same run can survive either shell (ADR-0009).
+        onDispose { unsubscribe() }
     }
     val snapshot = remember(state, revision) { state.snapshot() }
     val runState = remember(state, revision) { state.runSnapshot() }
