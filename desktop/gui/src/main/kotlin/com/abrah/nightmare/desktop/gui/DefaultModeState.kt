@@ -75,7 +75,7 @@ class WorkflowSession(initialWorkflow: Workflow = builtInTxt2imgWorkflow()) {
 class DefaultModeState(
     private val session: WorkflowSession = WorkflowSession(),
     private val runner: WorkflowRunner = WorkflowRunner(),
-) {
+) : WorkflowRunControl {
     private val listeners = mutableListOf<() -> Unit>()
     private var selectedNodeId: String? = session.workflow.nodes.firstOrNull()?.id
 
@@ -86,6 +86,9 @@ class DefaultModeState(
 
     /** The one workflow all interaction modes operate on. */
     val workflow: Workflow get() = session.workflow
+
+    /** The shared holder an external tool drives; keep one chain, not a second copy. */
+    val sharedSession: WorkflowSession get() = session
 
     /** Returns an unsubscribe function for shells that need to recompose on edits. */
     fun addChangeListener(listener: () -> Unit): () -> Unit {
@@ -123,10 +126,10 @@ class DefaultModeState(
      * Runs the shared workflow as a stateless CLI child process. Returns false
      * when a run is already in flight, so the shell can disable 「运行」.
      */
-    fun triggerRun(): Boolean = runner.run(session.workflow)
+    override fun triggerRun(): Boolean = runner.run(session.workflow)
 
     /** One immutable read of 运行态 for the shell and external tools. */
-    fun runSnapshot(): RunSnapshot = runner.snapshot()
+    override fun runSnapshot(): RunSnapshot = runner.snapshot()
 
     /** Live child handle, so window-close cleanup can end an active run. */
     fun runHandle(): Process? = runner.processHandle()
