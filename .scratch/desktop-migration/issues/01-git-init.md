@@ -4,7 +4,11 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `git status` 干净，`git log` 含 "baseline before desktop migration" 提交
-- [ ] `.gitignore` 已覆盖现有与 `desktop/`（后续）的构建产物路径
+- [x] `git status` 干净，`git log` 含 "baseline before desktop migration" 提交
+- [x] `.gitignore` 已覆盖现有与 `desktop/`（后续）的构建产物路径
+
+## Comments
+
+- 2026-11-25：baseline 提交 `cda80c6` 已落在 `main`；`.gitignore` 覆盖 `build/`、`.gradle/` 与 `desktop/` 产物。工单随基线提交关闭。

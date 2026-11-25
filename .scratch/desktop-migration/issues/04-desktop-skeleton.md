@@ -4,8 +4,12 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Linux 一条命令构建+测试成功，产物路径明确
-- [ ] `desktop/` 与 `app/` 零依赖（依赖树抽查通过）
-- [ ] 依赖版本锁定（版本目录/锁文件）
+- [x] Linux 一条命令构建+测试成功，产物路径明确
+- [x] `desktop/` 与 `app/` 零依赖（依赖树抽查通过）
+- [x] 依赖版本锁定（版本目录/锁文件）
+
+## Comments
+
+- 2026-11-25：独立 Gradle 工程落地于 `desktop/`，版本集中在 `gradle/libs.versions.toml`，构建/测试命令与产物路径见 `desktop/README.md`；合并提交 `a8dd227`。
