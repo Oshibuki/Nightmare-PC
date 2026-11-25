@@ -57,6 +57,7 @@ class CliTest {
         for (option in listOf(
             "--negative-prompt", "--width", "--height", "--steps",
             "--sampler", "--scheduler", "--cfg-scale", "--seed", "--batch", "--engine",
+            "--diffusion-model", "--llm", "--vae", "--llm_vision",
         )) {
             assertTrue("help should document $option: $text", text.contains(option))
         }

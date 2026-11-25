@@ -35,10 +35,15 @@ Layout by family, so a path says what a file is:
 
 ## How the CLI finds a model
 
-`txt2img` takes `--model <path>` and **nothing else**: there is no implicit
-search, no default, and no environment lookup in Phase 0. A path that does not
-exist fails immediately with exit code 1 before the engine is started, so a
-typo costs a second rather than a model load.
+`txt2img` takes either `--model <path>` (one self-contained checkpoint) or the
+multi-file set `--diffusion-model <path> --llm <path> --vae <path>`, with an
+optional `--llm_vision <path>` for Qwen Image. The two forms are mutually
+exclusive; see
+[`../README.md`](../README.md#multi-file-dit--gguf-models) for the engine
+arguments and examples. There is no implicit search, no default, and no
+environment lookup. A path that does not exist fails immediately with exit
+code 1 before the engine is started, so a typo costs a second rather than a
+model load.
 
 `NIGHTMARE_MODELS` is the documented root for scripts and for the Phase 1 model
 catalogue (ticket 13). The Phase 0 CLI does not read it — scripts should pass
@@ -77,9 +82,9 @@ The checksum is the one measured on the copy this machine's smoke run used; a
 mismatch means a different revision, not a corrupt engine.
 
 The file is a plain single-file SD1.5 checkpoint — the `.safetensors` the engine
-reads directly. Quantised GGUF checkpoints and the SDXL / DiT families (which
-need a separate text encoder and VAE) are later tickets; they go in their own
-subdirectory of the same cache.
+reads directly. The DiT families need a separate diffusion model, text encoder
+and VAE: they live in their own subdirectory of the same cache and are loaded
+through the multi-file pathway above, not through `--model`.
 
 ## Why this is the smoke model
 
