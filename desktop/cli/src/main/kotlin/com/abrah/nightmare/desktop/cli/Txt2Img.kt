@@ -80,8 +80,15 @@ internal object Txt2Img {
         "model", "diffusion-model", "llm", "vae", "llm_vision",
         "prompt", "negative-prompt", "width", "height",
         "steps", "sampler", "scheduler", "cfg-scale", "seed", "batch", "out", "engine",
-        "lora", "lora-dir",
+        "lora", "lora-dir", "vae-tiling", "vae-tile-size", "vae-tile-overlap",
     )
+
+    /**
+     * `--vae-tiling` is a switch, not a value-taking option: a bare flag means
+     * true, `--vae-tiling=false` means false. Without this set the parser would
+     * swallow the following `--vae-tile-size` as its value.
+     */
+    private val FLAG_OPTIONS = setOf("vae-tiling")
 
     fun run(args: List<String>, out: Appendable, err: Appendable, env: Map<String, String>): Int {
         val request = try {
@@ -92,9 +99,9 @@ internal object Txt2Img {
         }
 
         // Check what we can check ourselves before paying for a model load: a
-        // typo in any of the four paths must not cost ten minutes of engine
-        // start-up. Every error names the option, so a multi-file command says
-        // which of its files is wrong instead of just "model missing".
+        // typo in any path must not cost ten minutes of engine start-up. Every
+        // error names the option, so a multi-file command says which of its
+        // files is wrong instead of just "model missing".
         try {
             when (val choice = request.choice) {
                 is ModelChoice.SingleFile -> {
@@ -104,6 +111,9 @@ internal object Txt2Img {
                     if (readModel("--model", choice.path) is ModelFile.Contents.Gguf) {
                         throw ModelProblem(ggufInModelMessage(choice.path))
                     }
+                    // An SDXL VAE is real weight, not a label: check it before
+                    // the 6.9 GB checkpoint is decoded.
+                    choice.vae?.let { readModel("--vae", it) }
                 }
                 is ModelChoice.MultiFile -> {
                     readModel("--diffusion-model", choice.diffusionModel)
@@ -122,6 +132,7 @@ internal object Txt2Img {
         // adapter. Check every weight here instead: the engine is never
         // started for a LoRA request we cannot honour.
         val lora = prepareLoras(request, err) ?: return Cli.EXIT_FAILURE
+
 
         val engine = File(request.engine ?: env[ENV_ENGINE] ?: DEFAULT_ENGINE)
         if (!engine.isFile) {
@@ -240,20 +251,26 @@ internal object Txt2Img {
         out: Appendable,
         err: Appendable,
     ): Int {
+        // VAE tiling is appended only when asked for, so a plain run's engine
+        // command stays byte-for-byte the one ticket 11 documented.
         val code = try {
             runEngine(
                 engine,
-                request.choice.engineArgs() + listOf(
-                    "-p", lora.enginePrompt,
-                    "-n", request.negativePrompt,
-                    "-W", request.width.toString(),
-                    "-H", request.height.toString(),
-                    "--steps", request.steps.toString(),
-                    "--seed", seed.toString(),
-                    "--sampling-method", request.sampler,
-                    "--scheduler", request.scheduler,
-                    "--cfg-scale", cfgText(request.cfgScale),
-                ) + (lora.dir?.let { listOf("--lora-model-dir", it) } ?: emptyList()) +
+                request.choice.engineArgs() +
+                    (if (request.vaeTiling) listOf("--vae-tiling") else emptyList()) +
+                    (request.vaeTileSize?.let { listOf("--vae-tile-size", it) } ?: emptyList()) +
+                    (request.vaeTileOverlap?.let { listOf("--vae-tile-overlap", it) } ?: emptyList()) +
+                    listOf(
+                        "-p", lora.enginePrompt,
+                        "-n", request.negativePrompt,
+                        "-W", request.width.toString(),
+                        "-H", request.height.toString(),
+                        "--steps", request.steps.toString(),
+                        "--seed", seed.toString(),
+                        "--sampling-method", request.sampler,
+                        "--scheduler", request.scheduler,
+                        "--cfg-scale", cfgText(request.cfgScale),
+                    ) + (lora.dir?.let { listOf("--lora-model-dir", it) } ?: emptyList()) +
                     listOf("-o", target.path),
                 out,
             )
@@ -371,7 +388,8 @@ internal object Txt2Img {
      */
     private fun requireLoadableModels(choice: ModelChoice) {
         val paths = when (choice) {
-            is ModelChoice.SingleFile -> listOf("--model" to choice.path)
+            is ModelChoice.SingleFile ->
+                listOf("--model" to choice.path) + choice.vae?.let { listOf("--vae" to it) }.orEmpty()
             is ModelChoice.MultiFile ->
                 listOf(
                     "--diffusion-model" to choice.diffusionModel,
@@ -401,9 +419,14 @@ internal object Txt2Img {
         abstract val primaryPath: String
         abstract fun engineArgs(): List<String>
 
-        class SingleFile(val path: String) : ModelChoice() {
+        class SingleFile(val path: String, val vae: String?) : ModelChoice() {
             override val primaryPath: String get() = path
-            override fun engineArgs(): List<String> = listOf("-m", path)
+            override fun engineArgs(): List<String> = buildList {
+                add("-m"); add(path)
+                // An SDXL checkpoint may pair with a standalone VAE; a plain
+                // SD1.5 run sends no VAE flag at all.
+                if (vae != null) { add("--vae"); add(vae) }
+            }
         }
 
         class MultiFile(
@@ -444,6 +467,9 @@ internal object Txt2Img {
         val engine: String?,
         val loraEntries: List<LoraSpec.Entry>,
         val loraDir: String,
+        val vaeTiling: Boolean,
+        val vaeTileSize: String?,
+        val vaeTileOverlap: String?,
     )
 
     private class UsageException(message: String) : Exception(message)
@@ -469,6 +495,9 @@ internal object Txt2Img {
             loraEntries = options.loraEntries(),
             loraDir = options["lora-dir"]?.takeIf { it.isNotBlank() }
                 ?: ModelLibrary.resolve(null, env).resolve("lora").toString(),
+            vaeTiling = options.boolean("vae-tiling", false),
+            vaeTileSize = options.tileSize("vae-tile-size"),
+            vaeTileOverlap = options.fraction("vae-tile-overlap"),
         )
     }
 
@@ -503,7 +532,7 @@ internal object Txt2Img {
     private fun parseModelChoice(options: Map<String, String>): ModelChoice {
         val single = options["model"]
         val diffusion = options["diffusion-model"]
-        val multiOnly = listOf("llm", "vae", "llm_vision")
+        val multiOnly = listOf("llm", "llm_vision")
         when {
             single != null && diffusion != null -> throw UsageException(
                 "--model and --diffusion-model are mutually exclusive: use --model for a single-file " +
@@ -514,7 +543,11 @@ internal object Txt2Img {
                 if (stray != null) {
                     throw UsageException("'--$stray' belongs to the multi-file pathway and cannot be used with '--model'")
                 }
-                return ModelChoice.SingleFile(options.required("model"))
+                // --vae is legal here: an SDXL checkpoint can bring its own VAE.
+                return ModelChoice.SingleFile(
+                    options.required("model"),
+                    options["vae"]?.takeIf { it.isNotBlank() },
+                )
             }
             diffusion != null -> {
                 val missing = listOf("llm", "vae").filter { it !in options }
@@ -577,11 +610,16 @@ internal object Txt2Img {
                 i += 1
             } else {
                 requireKnown(body)
-                if (i + 1 >= args.size) {
-                    throw UsageException("option '--$body' needs a value")
+                if (body in FLAG_OPTIONS) {
+                    put(body, "true")
+                    i += 1
+                } else {
+                    if (i + 1 >= args.size) {
+                        throw UsageException("option '--$body' needs a value")
+                    }
+                    put(body, args[i + 1])
+                    i += 2
                 }
-                put(body, args[i + 1])
-                i += 2
             }
         }
         return options
@@ -627,6 +665,44 @@ internal object Txt2Img {
             throw UsageException("option '--$name' must be positive, got $raw")
         }
         return value
+    }
+
+    /** `--flag` and `--flag=true|false`, so a switch has one spelling per state. */
+    private fun Map<String, String>.boolean(name: String, default: Boolean): Boolean {
+        val raw = this[name] ?: return default
+        return when (raw.lowercase()) {
+            "true" -> true
+            "false" -> false
+            else -> throw UsageException("option '--$name' must be true or false, got '$raw'")
+        }
+    }
+
+    /**
+     * The engine's `--vae-tile-size` is `WxH`, not two numbers and not `W,H`.
+     * The text is kept verbatim so the engine sees exactly what the caller
+     * typed; only the shape is checked here.
+     */
+    private fun Map<String, String>.tileSize(name: String): String? {
+        val raw = this[name] ?: return null
+        val match = Regex("^(\\d+)x(\\d+)$").matchEntire(raw)
+            ?: throw UsageException("option '--$name' must be WxH, got '$raw'")
+        val width = match.groupValues[1].toIntOrNull()
+        val height = match.groupValues[2].toIntOrNull()
+        if (width == null || height == null || width <= 0 || height <= 0) {
+            throw UsageException("option '--$name' must be positive WxH, got '$raw'")
+        }
+        return raw
+    }
+
+    /** Tile overlap is a fraction of a tile; an overlap of one seam is nonsense. */
+    private fun Map<String, String>.fraction(name: String): String? {
+        val raw = this[name] ?: return null
+        val value = raw.toDoubleOrNull()
+            ?: throw UsageException("option '--$name' needs a number, got '$raw'")
+        if (!value.isFinite() || value <= 0.0 || value >= 1.0) {
+            throw UsageException("option '--$name' must be between 0 and 1, got '$raw'")
+        }
+        return raw
     }
 
     /**

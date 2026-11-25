@@ -93,8 +93,10 @@ object Cli {
         |                                  and is mutually exclusive with --model.
         |      --llm <path>                Text encoder of that pipeline (required with
         |                                  --diffusion-model).
-        |      --vae <path>                VAE decoder of that pipeline (required with
-        |                                  --diffusion-model); .safetensors or .gguf.
+        |      --vae <path>                VAE weights: required with --diffusion-model
+        |                                  (multi-file DiT/GGUF), optional with --model
+        |                                  for a standalone SDXL VAE. .safetensors or
+        |                                  .gguf; checked before the engine starts.
         |      --llm_vision <path>         Vision encoder of that pipeline, e.g. the
         |                                  mmproj of Qwen Image (optional).
         |      --prompt <text>             Prompt to render (required).
@@ -128,6 +130,12 @@ object Cli {
         |                                  ~/${ModelLibrary.DEFAULT_SUBPATH}/lora.
         |      --engine <path>             sd-cli binary to run. Defaults to
         |                                  ${'$'}NIGHTMARE_SD_BIN, then ${Txt2Img.DEFAULT_ENGINE}.
+        |      --vae-tiling                Decode the VAE in tiles to lower memory
+        |                                  use at 1024x1024 and above. A bare flag
+        |                                  means on; --vae-tiling=false means off.
+        |      --vae-tile-size <WxH>       VAE tile size, e.g. 64x64. Engine default 32x32.
+        |      --vae-tile-overlap <float>  Tile overlap as a fraction between 0 and 1
+        |                                  (engine default 0.5).
         |
         |img2img options:
         |      --model <path>              Model file to load (required, single-file
