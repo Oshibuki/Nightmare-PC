@@ -2,6 +2,7 @@
 
 Type: wayfinder:prototype
 Status: open
+Blocked by: 08
 
 ## Question
 
