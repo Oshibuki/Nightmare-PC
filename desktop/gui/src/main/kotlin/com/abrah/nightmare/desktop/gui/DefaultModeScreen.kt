@@ -37,8 +37,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * 默认模式 shell: prototype C's chain rail, large result preview and parameter
- * drawer. It renders only the shared workflow state; no second chain is kept.
+ * 默认模式 shell: prototype C's chain rail, large result preview, parameter
+ * drawer and one log panel for progress events plus raw engine output. It
+ * renders only the shared workflow/run state; no second chain is kept.
  */
 @Composable
 fun DefaultModeScreen(state: DefaultModeState = remember { DefaultModeState() }) {
@@ -48,15 +49,26 @@ fun DefaultModeScreen(state: DefaultModeState = remember { DefaultModeState() })
         onDispose(unsubscribe)
     }
     val snapshot = remember(state, revision) { state.snapshot() }
+    val runState = remember(state, revision) { state.runSnapshot() }
 
     Column(
         modifier = Modifier.fillMaxSize().background(Color(0xFFF5F7FB)),
     ) {
-        ChainRail(snapshot = snapshot, onSelect = { nodeId -> state.selectNode(nodeId) })
+        ChainRail(
+            snapshot = snapshot,
+            runState = runState,
+            onSelect = { nodeId -> state.selectNode(nodeId) },
+            onRun = {
+                // run() blocks on the child process; keep the shell responsive.
+                Thread { state.triggerRun() }.apply { isDaemon = true }.start()
+            },
+        )
 
         Row(modifier = Modifier.fillMaxSize().weight(1f)) {
             ResultPreview(
                 preview = snapshot.preview,
+                results = runState.results,
+                status = runState.status,
                 modifier = Modifier.weight(0.58f),
             )
             ParameterDrawer(
@@ -65,11 +77,18 @@ fun DefaultModeScreen(state: DefaultModeState = remember { DefaultModeState() })
                 modifier = Modifier.weight(0.42f),
             )
         }
+
+        RunLogPanel(runState = runState, modifier = Modifier.fillMaxWidth().height(160.dp))
     }
 }
 
 @Composable
-private fun ChainRail(snapshot: DefaultModeSnapshot, onSelect: (String) -> Unit) {
+private fun ChainRail(
+    snapshot: DefaultModeSnapshot,
+    runState: RunSnapshot,
+    onSelect: (String) -> Unit,
+    onRun: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -103,14 +122,33 @@ private fun ChainRail(snapshot: DefaultModeSnapshot, onSelect: (String) -> Unit)
         }
 
         Spacer(modifier = Modifier.weight(1f))
-        Button(onClick = {}, enabled = false) {
-            Text("运行（后续工单接入）")
+        val running = runState.status == RunStatus.RUNNING
+        val total = runState.progress.lastOrNull()?.total ?: 0
+        Text(
+            when {
+                running -> "生成中 ${runState.progress.size}/$total"
+                runState.status == RunStatus.SUCCESS -> "完成 · ${runState.results.size} 张"
+                runState.error != null -> runState.error.orEmpty()
+                else -> "就绪"
+            },
+            color = if (runState.error != null) Color(0xFFB23B3B) else Color(0xFF66738C),
+            fontSize = 12.sp,
+            modifier = Modifier.padding(end = 12.dp),
+        )
+        Button(onClick = onRun, enabled = !running) {
+            Text(if (running) "运行中" else "运行")
         }
     }
 }
 
 @Composable
-private fun ResultPreview(preview: PreviewInfo, modifier: Modifier = Modifier) {
+private fun ResultPreview(
+    preview: PreviewInfo,
+    results: List<ResultArtifact>,
+    status: RunStatus,
+    modifier: Modifier = Modifier,
+) {
+    val latest = results.lastOrNull()
     Box(
         modifier = modifier.fillMaxSize().background(Color(0xFF1E2431)),
         contentAlignment = Alignment.Center,
@@ -124,15 +162,56 @@ private fun ResultPreview(preview: PreviewInfo, modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(preview.title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(preview.detail, color = Color(0xFFCFD8EA))
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                "内置工作流已加载；运行生成后在此查看 PNG。",
-                color = Color(0xFF9FADC7),
-                fontSize = 12.sp,
-            )
+            if (latest != null) {
+                Text("生成成功", color = Color(0xFF9BE0A6), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(latest.path, color = Color.White, fontSize = 13.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(paramsSummary(latest.params), color = Color(0xFFCFD8EA), fontSize = 12.sp)
+            } else {
+                Text(preview.title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(preview.detail, color = Color(0xFFCFD8EA))
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    if (status == RunStatus.RUNNING) {
+                        "引擎正在生成，逐张进度见下方日志面板。"
+                    } else {
+                        "内置工作流已加载；点击「运行」生成 PNG。"
+                    },
+                    color = Color(0xFF9FADC7),
+                    fontSize = 12.sp,
+                )
+            }
+        }
+    }
+}
+
+/** The settings shown next to a successful PNG, so one image maps to one run. */
+private fun paramsSummary(params: Map<String, String>): String = listOfNotNull(
+    params["prompt"]?.takeIf { it.isNotBlank() },
+    params["steps"]?.let { "steps $it" },
+    params["seed"]?.let { "seed $it" },
+    params["width"]?.let { width -> params["height"]?.let { height -> "${width}×${height}" } },
+).joinToString(" · ")
+
+/** One panel for both structured progress events and unmodified engine output. */
+@Composable
+private fun RunLogPanel(runState: RunSnapshot, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.background(Color(0xFF141A26)).padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Text(
+            "运行日志 · 进度事件 ${runState.progress.size} 条 · 引擎输出 ${runState.log.size} 行",
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            runState.log.takeLast(80).forEach { line ->
+                Text(line, color = Color(0xFFB8C6DE), fontSize = 11.sp)
+            }
         }
     }
 }
