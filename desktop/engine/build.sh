@@ -59,7 +59,7 @@ CACHE_ROOT=${NIGHTMARE_ENGINE_CACHE:-$HOME/.cache/nightmare-desktop/engine}
 usage() {
   cat <<'EOF'
 usage: build.sh [--vulkan] [--jobs N] [--clean] [--patch FILE...]
-                [--no-publish] [--dry-run]
+                [--no-publish] [--cmake-arg ARG] [--dry-run]
 
   (no flags)   CPU build into desktop/engine/build
                -> desktop/engine/build/bin/sd-cli
@@ -134,7 +134,7 @@ else
 fi
 
 # ⚠ Validate every patch BEFORE configuring anything: a typo in the last
-# argument must not cost a ten-minute build that then fails on the patch step.
+# argument must not cost a full build that then fails on the patch step.
 abs_patches=()
 for p in ${patches[@]+"${patches[@]}"}; do
   [ -e "$p" ] || die "patch file not found: $p"
