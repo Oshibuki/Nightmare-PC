@@ -105,6 +105,15 @@ object Cli {
         |                                  keeps the --out path.
         |      --engine <path>             sd-cli binary to run. Defaults to
         |                                  ${'$'}NIGHTMARE_SD_BIN, then ${Txt2Img.DEFAULT_ENGINE}.
+        |      --vae <path>                Standalone VAE weights, e.g. an SDXL VAE.
+        |                                  Optional; the file is checked before the
+        |                                  engine starts and passed as --vae.
+        |      --vae-tiling                Decode the VAE in tiles to lower memory
+        |                                  use at 1024x1024 and above. A bare flag
+        |                                  means on; --vae-tiling=false means off.
+        |      --vae-tile-size <WxH>       VAE tile size, e.g. 64x64. Engine default 32x32.
+        |      --vae-tile-overlap <float>  Tile overlap as a fraction between 0 and 1
+        |                                  (engine default 0.5).
         |
         |models list options:
         |      --dir <path>                Directory to scan. Defaults to

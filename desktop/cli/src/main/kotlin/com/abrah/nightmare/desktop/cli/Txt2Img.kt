@@ -72,11 +72,22 @@ internal object Txt2Img {
     private val KNOWN_OPTIONS = setOf(
         "model", "prompt", "negative-prompt", "width", "height",
         "steps", "sampler", "scheduler", "cfg-scale", "seed", "batch", "out", "engine",
+        "vae", "vae-tiling", "vae-tile-size", "vae-tile-overlap",
     )
+
+    /**
+     * `--vae-tiling` is a switch, not a value-taking option: a bare flag means
+     * true, `--vae-tiling=false` means false. Without this set the parser would
+     * swallow the following `--vae-tile-size` as its value.
+     */
+    private val FLAG_OPTIONS = setOf("vae-tiling")
 
     fun run(args: List<String>, out: Appendable, err: Appendable, env: Map<String, String>): Int {
         val request = try {
-            parse(args).also { requireLoadableModel(it.model) }
+            parse(args).also { parsed ->
+                requireLoadableModel(parsed.model)
+                parsed.vae?.let(::requireLoadableVae)
+            }
         } catch (e: UsageException) {
             err.append(usageError(e.message ?: "bad arguments"))
             return Cli.EXIT_USAGE
@@ -110,6 +121,15 @@ internal object Txt2Img {
                 ),
             )
             return Cli.EXIT_FAILURE
+        }
+        // An SDXL VAE is a real weight file, not a label. Refuse a missing one
+        // here rather than after the 6.9 GB checkpoint has been decoded.
+        if (request.vae != null) {
+            val vaeFile = File(request.vae)
+            if (!vaeFile.isFile || !vaeFile.canRead()) {
+                err.append(failure("VAE '${request.vae}' does not exist or is not readable"))
+                return Cli.EXIT_FAILURE
+            }
         }
         val engine = File(request.engine ?: env[ENV_ENGINE] ?: DEFAULT_ENGINE)
         if (!engine.isFile) {
@@ -161,24 +181,28 @@ internal object Txt2Img {
         out: Appendable,
         err: Appendable,
     ): Int {
+        // The SDXL/VAE knobs are appended only when asked for, so the SD1.5
+        // command line stays byte-for-byte the one ticket 11 documented.
+        val engineArgs = mutableListOf(
+            "-m", request.model,
+            "-p", request.prompt,
+            "-n", request.negativePrompt,
+            "-W", request.width.toString(),
+            "-H", request.height.toString(),
+            "--steps", request.steps.toString(),
+            "--seed", seed.toString(),
+            "--sampling-method", request.sampler,
+            "--scheduler", request.scheduler,
+            "--cfg-scale", cfgText(request.cfgScale),
+        )
+        request.vae?.let { engineArgs += listOf("--vae", it) }
+        if (request.vaeTiling) engineArgs += "--vae-tiling"
+        request.vaeTileSize?.let { engineArgs += listOf("--vae-tile-size", it) }
+        request.vaeTileOverlap?.let { engineArgs += listOf("--vae-tile-overlap", it) }
+        engineArgs += listOf("-o", target.path)
+
         val code = try {
-            runEngine(
-                engine,
-                listOf(
-                    "-m", request.model,
-                    "-p", request.prompt,
-                    "-n", request.negativePrompt,
-                    "-W", request.width.toString(),
-                    "-H", request.height.toString(),
-                    "--steps", request.steps.toString(),
-                    "--seed", seed.toString(),
-                    "--sampling-method", request.sampler,
-                    "--scheduler", request.scheduler,
-                    "--cfg-scale", cfgText(request.cfgScale),
-                    "-o", target.path,
-                ),
-                out,
-            )
+            runEngine(engine, engineArgs, out)
         } catch (e: IOException) {
             err.append(failure("cannot run engine '$engine': ${e.message}"))
             return Cli.EXIT_FAILURE
@@ -269,6 +293,16 @@ internal object Txt2Img {
         }
     }
 
+    /** Same rule as [requireLoadableModel]: a VAE is weights, not a file name. */
+    private fun requireLoadableVae(path: String) {
+        if (ModelFile.formatOf(Paths.get(path)) == null) {
+            throw UsageException(
+                "--vae '${File(path).name}' is not a model file this build reads " +
+                    "(supported: ${ModelFile.EXTENSIONS.joinToString(", ") { ".$it" }})",
+            )
+        }
+    }
+
     /** Everything the engine call needs, after the command line has been checked. */
     private class Request(
         val model: String,
@@ -284,6 +318,10 @@ internal object Txt2Img {
         val batch: Int,
         val out: String,
         val engine: String?,
+        val vae: String?,
+        val vaeTiling: Boolean,
+        val vaeTileSize: String?,
+        val vaeTileOverlap: String?,
     )
 
     private class UsageException(message: String) : Exception(message)
@@ -306,6 +344,10 @@ internal object Txt2Img {
             cfgScale = options.positiveDouble("cfg-scale", DEFAULT_CFG),
             batch = options.intIn("batch", DEFAULT_BATCH, BATCH_RANGE),
             engine = options["engine"],
+            vae = options["vae"],
+            vaeTiling = options.boolean("vae-tiling", false),
+            vaeTileSize = options.tileSize("vae-tile-size"),
+            vaeTileOverlap = options.fraction("vae-tile-overlap"),
         )
     }
 
@@ -326,11 +368,16 @@ internal object Txt2Img {
                 i += 1
             } else {
                 requireKnown(body)
-                if (i + 1 >= args.size) {
-                    throw UsageException("option '--$body' needs a value")
+                if (body in FLAG_OPTIONS) {
+                    options[body] = "true"
+                    i += 1
+                } else {
+                    if (i + 1 >= args.size) {
+                        throw UsageException("option '--$body' needs a value")
+                    }
+                    options[body] = args[i + 1]
+                    i += 2
                 }
-                options[body] = args[i + 1]
-                i += 2
             }
         }
         return options
@@ -376,6 +423,44 @@ internal object Txt2Img {
             throw UsageException("option '--$name' must be positive, got $raw")
         }
         return value
+    }
+
+    /** `--flag` and `--flag=true|false`, so a switch has one spelling per state. */
+    private fun Map<String, String>.boolean(name: String, default: Boolean): Boolean {
+        val raw = this[name] ?: return default
+        return when (raw.lowercase()) {
+            "true" -> true
+            "false" -> false
+            else -> throw UsageException("option '--$name' must be true or false, got '$raw'")
+        }
+    }
+
+    /**
+     * The engine's `--vae-tile-size` is `WxH`, not two numbers and not `W,H`.
+     * The text is kept verbatim so the engine sees exactly what the caller
+     * typed; only the shape is checked here.
+     */
+    private fun Map<String, String>.tileSize(name: String): String? {
+        val raw = this[name] ?: return null
+        val match = Regex("^(\\d+)x(\\d+)$").matchEntire(raw)
+            ?: throw UsageException("option '--$name' must be WxH, got '$raw'")
+        val width = match.groupValues[1].toIntOrNull()
+        val height = match.groupValues[2].toIntOrNull()
+        if (width == null || height == null || width <= 0 || height <= 0) {
+            throw UsageException("option '--$name' must be positive WxH, got '$raw'")
+        }
+        return raw
+    }
+
+    /** Tile overlap is a fraction of a tile; an overlap of one seam is nonsense. */
+    private fun Map<String, String>.fraction(name: String): String? {
+        val raw = this[name] ?: return null
+        val value = raw.toDoubleOrNull()
+            ?: throw UsageException("option '--$name' needs a number, got '$raw'")
+        if (!value.isFinite() || value <= 0.0 || value >= 1.0) {
+            throw UsageException("option '--$name' must be between 0 and 1, got '$raw'")
+        }
+        return raw
     }
 
     /**
