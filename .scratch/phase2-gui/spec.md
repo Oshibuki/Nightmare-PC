@@ -1,7 +1,11 @@
 # Spec: Phase 2 桌面 GUI（Nightmare Desktop）
 
-Status: ready-for-agent
+Status: resolved
 Type: spec
+
+## Completion (2026-11-26)
+
+全部 10 张实现工单（10–19）已 resolved 并合并到集成分支 `desktop-migration`，最终 tip `3f46ce5`（含 code-review 修复）。两轴 code-review（Standards + Spec）经对抗性复核确认 2 条真实问题（高级模式连线绘制坐标空间不一致、README 与实现矛盾），已在单个修复提交 `2decbdf` 中修复并复验。最终验证：全量 `--no-build-cache cleanTest build` 366 tests / 0 failures（`/tmp/final-build-after-review.log`）；一键验收 `verify-gui.sh` 无权重路径 `VERIFY_RC=0`、`verify-gui: PASS`（`/tmp/final-verify-gui.log`）。未验证边界（如实记录）：真实权重下的 SD1.5 冒烟、GUI 弹窗/鼠标端到端、Windows/macOS 编译——均属 ADR-0011 当前验收范围外。
 
 > 领域术语见根 `GLOSSARY.md`（工作流、节点类型、交互模式、运行态、进度事件、验收脚本）；本规格综合 `.scratch/phase2-gui/map.md` 与工单 01–09 的已裁决结论，不重新设计。反直觉取舍见 ADR-0006～0011。测试接缝沿用 Phase 0/1 已有的两条，不新增。
 
