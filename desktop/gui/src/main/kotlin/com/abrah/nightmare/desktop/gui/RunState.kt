@@ -11,6 +11,21 @@ package com.abrah.nightmare.desktop.gui
 enum class RunStatus { IDLE, RUNNING, SUCCESS, FAILURE, CANCELLED }
 
 /**
+ * The failure signals from ADR-0010, collapsed into one run state. Callers
+ * should not need to understand which layer produced the failure.
+ */
+enum class FailureKind { EXIT_CODE, STDERR, TIMEOUT, MISSING_MODEL }
+
+/** Shell-level run settings. The 10-minute default is required by ADR-0010. */
+object GuiRunSettings {
+    const val DEFAULT_TIMEOUT_MILLIS = 600_000L
+
+    /** Changed by the default shell's timeout field; read at the start of each run. */
+    @Volatile
+    var timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS
+}
+
+/**
  * 进度事件 parsed from one CLI stdout progress line:
  * `[i/N] seed=S -> path`. [path] is the CLI's target, not necessarily an
  * existing file until the process exits successfully.
@@ -36,6 +51,11 @@ data class RunSnapshot(
     val results: List<ResultArtifact> = emptyList(),
     val error: String? = null,
     val command: List<String> = emptyList(),
+    /** Set only on FAILURE; the error bar and external tools use it consistently. */
+    val failureKind: FailureKind? = null,
+    val exitCode: Int? = null,
+    /** First readable line from stderr/stdout; the full text stays in [log]. */
+    val firstReason: String? = null,
 )
 
 /**
