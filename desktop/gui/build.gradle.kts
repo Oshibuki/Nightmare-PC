@@ -12,6 +12,13 @@ dependencies {
     implementation(compose.desktop.currentOs)
     // The GUI and :cli share the same JVM model types; no Android code is used.
     implementation(project(":core"))
+    // JVM state tests assert observable run state without a UI test framework.
+    testImplementation(libs.junit)
+}
+
+tasks.test {
+    useJUnit()
+    testLogging { events("passed", "failed", "skipped") }
 }
 
 compose.desktop {
