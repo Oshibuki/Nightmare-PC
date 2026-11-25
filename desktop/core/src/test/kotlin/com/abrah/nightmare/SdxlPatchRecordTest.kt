@@ -68,17 +68,18 @@ class SdxlPatchRecordTest {
     @Test
     fun `every SDXL patch has exactly one row in the application record`() {
         val lines = recordLines()
+        val patches = sdxlPatches()
         val missing = mutableListOf<String>()
         val duplicated = mutableListOf<String>()
 
-        for (rel in sdxlPatches()) {
+        for (rel in patches) {
             when (rowsFor(rel, lines).size) {
                 0 -> missing += rel
                 1 -> Unit
                 else -> duplicated += rel
             }
         }
-        assertTrue("but the library has SDXL patches: ${sdxlPatches()}", sdxlPatches().isNotEmpty())
+        assertTrue("but the library has SDXL patches: $patches", patches.isNotEmpty())
         assertEquals("SDXL patches with no row in SDXL.md", emptyList<String>(), missing)
         assertEquals("SDXL patches with more than one row", emptyList<String>(), duplicated)
     }

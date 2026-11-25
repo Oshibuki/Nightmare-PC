@@ -65,7 +65,7 @@ applied. No patch file was edited, and the clean engine baseline is unchanged.
 
 `nightmare-desktop txt2img --model <sdxl.safetensors> -W 1024 -H 1024` needs
 no `--type` or model-mode flag: the engine reads SDXL version from the
-checkpoint. Two optional knobs exist for large SDXL runs:
+checkpoint. The optional knobs for large SDXL runs are:
 
 | CLI flag | Engine flag | Purpose |
 |---|---|---|

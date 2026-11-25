@@ -284,20 +284,15 @@ internal object Txt2Img {
      * A path whose extension is not a format this build reads is a mistake in
      * the command line, not a broken file -- so it exits 2 without opening it.
      */
-    private fun requireLoadableModel(path: String) {
-        if (ModelFile.formatOf(Paths.get(path)) == null) {
-            throw UsageException(
-                "--model '${File(path).name}' is not a model file this build reads " +
-                    "(supported: ${ModelFile.EXTENSIONS.joinToString(", ") { ".$it" }})",
-            )
-        }
-    }
+    private fun requireLoadableModel(path: String) = requireLoadableWeights("--model", path)
 
     /** Same rule as [requireLoadableModel]: a VAE is weights, not a file name. */
-    private fun requireLoadableVae(path: String) {
+    private fun requireLoadableVae(path: String) = requireLoadableWeights("--vae", path)
+
+    private fun requireLoadableWeights(option: String, path: String) {
         if (ModelFile.formatOf(Paths.get(path)) == null) {
             throw UsageException(
-                "--vae '${File(path).name}' is not a model file this build reads " +
+                "$option '${File(path).name}' is not a model file this build reads " +
                     "(supported: ${ModelFile.EXTENSIONS.joinToString(", ") { ".$it" }})",
             )
         }
