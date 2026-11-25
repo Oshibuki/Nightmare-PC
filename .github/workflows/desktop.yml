@@ -81,13 +81,16 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      # The same command `desktop/README.md` documents, run from `desktop/`:
-      # `build` compiles both modules and runs every JVM test. No JAVA_HOME
-      # export is needed here — setup-java exports it.
-      - name: Build and test
+      # The single acceptance entry point from ADR-0011. It runs `:gui:classes`,
+      # the full build + every JVM test, the fake CLI runner end-to-end seam and
+      # the workflow-persistence seam — each with its own timeout and log. On a
+      # runner there is no weight cache, so the real SD1.5 smoke is skipped by
+      # design (documented in the log), and the GUI launch is off by default.
+      # JAVA_HOME is exported by setup-java; the script never overwrites it.
+      - name: Verify GUI (build, tests, seams)
         working-directory: desktop
         timeout-minutes: 15
-        run: ./gradlew --no-daemon build
+        run: ./verify-gui.sh
 
       # A red test run is only useful if the report survives the runner.
       - name: Upload test reports
