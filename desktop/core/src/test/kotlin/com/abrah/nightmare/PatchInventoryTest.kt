@@ -64,9 +64,12 @@ class PatchInventoryTest {
     private fun rowsFor(rel: String, lines: List<String>): List<String> =
         lines.filter { it.startsWith("| `$rel` |") }
 
+    /** Rows of the ticket-09 inventory table; the ticket-22 section has its own rows for the same paths. */
+    private fun inventoryTableLines(): List<String> = inventoryLines().takeWhile { it != conclusionHeading }
+
     @Test
     fun `every patch in the library has exactly one row`() {
-        val lines = inventoryLines()
+        val lines = inventoryTableLines()
         val missing = mutableListOf<String>()
         val duplicated = mutableListOf<String>()
 
@@ -84,7 +87,7 @@ class PatchInventoryTest {
 
     @Test
     fun `every row names exactly one verdict`() {
-        val lines = inventoryLines()
+        val lines = inventoryTableLines()
         val wrong = patchFiles().mapNotNull { rel ->
             val row = rowsFor(rel, lines).singleOrNull() ?: return@mapNotNull null
             val named = verdicts.filter { row.contains(it) }
@@ -96,7 +99,7 @@ class PatchInventoryTest {
 
     @Test
     fun `the inventory has no rows for files that do not exist`() {
-        val lines = inventoryLines()
+        val lines = inventoryTableLines()
         val onDisk = patchFiles().toSet()
         // Rows that name a literal file. A first cell containing `*` is a routing
         // pattern (`*.sdcpp.patch`), not a claim about one file, so it is not a row.
@@ -112,5 +115,95 @@ class PatchInventoryTest {
         )
         // Every file has one row (asserted above), so the row count is the file count.
         assertEquals("rows vs patch files on disk", onDisk.size, rowPaths.size)
+    }
+
+    /** The ticket-22 section that settles each deferred patch, separate from the ticket-09 verdict. */
+    private val conclusionHeading = "## Deferred patch verdicts"
+
+    /** The three desktop conclusions, spelled exactly as the section writes them. */
+    private val conclusions = listOf("`applicable`", "`excluded`", "`conditional`")
+
+    /**
+     * One conclusion per deferred patch, decided from the patch body and the pinned engine,
+     * not derived from PATCHES.md. The expected value is the independent source of truth:
+     * if the document drifts, this comparison goes red.
+     */
+    private val expectedConclusions = mapOf(
+        "dit/007-qwen21-graph-cut.sdcpp.patch" to "`conditional`",
+        "dit/008-anima-fused-ops.sdcpp.patch" to "`conditional`",
+        "dit/009-wan-fused-ops.sdcpp.patch" to "`excluded`",
+        "dit/029-ideogram4-fused-rope.sdcpp.patch" to "`excluded`",
+        "dit/035-moss-fused-rope.sdcpp.patch" to "`excluded`",
+        "dit/037-iris-fused-rope.sdcpp.patch" to "`excluded`",
+        "dit/043-flux3-fused-rope.sdcpp.patch" to "`excluded`",
+        "dit/055-flux3-graph-cut.sdcpp.patch" to "`excluded`",
+        "dit/060-graph-cut-use-counts.sdcpp.patch" to "`conditional`",
+        "dit/071-minimax-h3-fused-partial-rope.sdcpp.patch" to "`excluded`",
+        "dit/074-minimax-h3-vae-fused-rope.sdcpp.patch" to "`excluded`",
+        "dit/093-moss-lora-fused-qkv.sdcpp.patch" to "`conditional`",
+        "dit/094-lowres-spectrum-spike.sdcpp.patch" to "`conditional`",
+        "dit/095-keep-runners-spike.sdcpp.patch" to "`conditional`",
+        "dit/spike-dit-no-fa.patch" to "`excluded`",
+        "dit/spike-nan-probe.sdcpp.patch" to "`conditional`",
+        "dit/spike-sd-cli.patch" to "`excluded`",
+        "dit/spike-segment-timing.sdcpp.patch" to "`conditional`",
+    )
+
+    /** Cells of each `| `path` | `conclusion` | reason |` row in the ticket-22 section. */
+    private fun conclusionRows(): List<List<String>> {
+        val lines = inventoryLines()
+        val start = lines.indexOf(conclusionHeading)
+        assertTrue("PATCHES.md has no '$conclusionHeading' section", start >= 0)
+        return lines.drop(start + 1)
+            .takeWhile { !it.startsWith("## ") }
+            .filter { it.startsWith("| `") && ".patch`" in it }
+            .map { line -> line.trim().removePrefix("|").removeSuffix("|").split('|').map { it.trim() } }
+    }
+
+    private fun deferredPatches(): List<String> {
+        val lines = inventoryTableLines()
+        return patchFiles().filter { rel ->
+            rowsFor(rel, lines).singleOrNull()?.contains(verdicts[3]) ?: false
+        }
+    }
+
+    @Test
+    fun `each deferred patch has exactly one desktop conclusion row`() {
+        val deferred = deferredPatches()
+        val paths = conclusionRows().map { it[0].removeSurrounding("`") }
+        assertEquals("deferred patches with no conclusion row", emptyList<String>(), deferred - paths.toSet())
+        assertEquals(
+            "conclusion rows for patches that are not deferred",
+            emptyList<String>(),
+            paths - deferred.toSet(),
+        )
+        assertEquals(
+            "patches with more than one conclusion row",
+            emptyList<String>(),
+            paths.groupingBy { it }.eachCount().filterValues { it != 1 }.keys.toList(),
+        )
+    }
+
+    @Test
+    fun `each desktop conclusion is unique and carries a reason`() {
+        val wrong = conclusionRows().mapNotNull { cells ->
+            val given = conclusions.filter { it == cells.getOrNull(1) }
+            val reason = cells.getOrNull(2).orEmpty()
+            if (given.size != 1 || reason.isBlank()) "$cells" else null
+        }
+        assertEquals("rows without exactly one conclusion and a reason", emptyList<String>(), wrong)
+        // A repeated boilerplate reason is not a per-patch verdict: it is the old generic
+        // "deferred to Phase 1" remark wearing a new column.
+        assertEquals(
+            "identical reasons across deferred patches",
+            emptyList<String>(),
+            conclusionRows().map { it[2] }.groupingBy { it }.eachCount().filterValues { it > 1 }.keys.toList(),
+        )
+    }
+
+    @Test
+    fun `desktop conclusions match the recorded evidence`() {
+        val actual = conclusionRows().associate { it[0].removeSurrounding("`") to it[1] }
+        assertEquals("ticket-22 desktop conclusions", expectedConclusions, actual)
     }
 }

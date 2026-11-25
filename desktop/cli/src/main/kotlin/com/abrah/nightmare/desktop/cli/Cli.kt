@@ -47,6 +47,7 @@ object Cli {
             }
             Txt2Img.NAME -> Txt2Img.run(args.drop(1), out, err, env)
             Models.NAME -> Models.run(args.drop(1), out, err, env)
+            Serve.NAME -> Serve.run(args.drop(1), out, err, env)
             else -> {
                 err.append(usageError("unrecognised argument '$first'"))
                 EXIT_USAGE
@@ -68,6 +69,7 @@ object Cli {
         |  ${ProductIdentity.NAME} txt2img --model <path> --prompt <text> --out <path> [options]
         |  ${ProductIdentity.NAME} txt2img --diffusion-model <gguf> --llm <gguf> --vae <file> --prompt <text> --out <path> [options]
         |  ${ProductIdentity.NAME} models list [--dir <path>]
+        |  ${ProductIdentity.NAME} serve --model <path> [--port <1-65535>]
         |
         |Options:
         |  -h, --help     Show this help and exit.
@@ -76,6 +78,7 @@ object Cli {
         |Commands:
         |  txt2img        Generate images from a prompt with the vendored engine.
         |  models list    List the models in the local library, with their format.
+        |  serve          Run the engine's A1111-compatible local HTTP API.
         |
         |txt2img options:
         |      --model <path>              Model file to load. A single-file
@@ -126,6 +129,19 @@ object Cli {
         |models list options:
         |      --dir <path>                Directory to scan. Defaults to
         |                                  ${'$'}${ModelLibrary.ENV_MODELS}, then ~/${ModelLibrary.DEFAULT_SUBPATH}.
+        |
+        |serve options:
+        |      --model <path>              Model file to load (required).
+        |      --port <1-65535>            TCP port (default: ${Serve.DEFAULT_PORT}). The
+        |                                  address is always 127.0.0.1; there is
+        |                                  no flag to bind another interface.
+        |      --engine <path>             sd-server binary to run. Defaults to
+        |                                  ${'$'}${Serve.ENV_ENGINE}, then ${Serve.DEFAULT_ENGINE}.
+        |
+        |The HTTP service is off by default and starts only when the `serve`
+        |command is given. It binds 127.0.0.1 only, so it is never reachable
+        |from the LAN; /sdapi/v1/* comes from the engine itself. Real A1111
+        |client compatibility is not claimed here.
         |
         |Progress goes to stdout: one "[i/N] seed=<seed> -> <path>" line per image,
         |then the engine's own output as it arrives. Each PNG carries an
