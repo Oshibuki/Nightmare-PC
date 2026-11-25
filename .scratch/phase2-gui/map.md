@@ -19,11 +19,11 @@ Status: charted
 
 - [确认 Compose Multiplatform 的落地方式](issues/01-compose-build-setup.md)：保持 JVM 插件，新增 `:gui` 模块，Kotlin 2.4.21 + Compose compiler 2.4.21 + CMP 1.12.2，并在依赖仓库中加 `google()`；`cd desktop && ./gradlew :gui:run` 验证（结论文档在 research 分支提交 `beedd0e`）。
 - [核实工作流 JSON 的可复制性](issues/04-workflow-json-reuse.md)：两个移动版文件都不能直接复制（传递依赖拖进 NPU/视频资产与 `R`）；桌面自写最小 JSON 读写，并借用 `format`/`nodes`/`requires`/`view` 线格式形状，安全 id 与原子保存模式照搬思路。
+- [工作流的保存与载入范围](issues/05-persistence-scope.md)：最小闭环含新建/载入/保存，严格 `format=1`；显式保存，三类失败统一界面内错误条且工作流不变，用临时目录 + 合成坏文件做端到端断言；术语统一为「工作流/内置工作流」。
 
 ## Not yet specified
 
 - 节点库、连线、参数面板、缩放平移的具体交互形态：等「节点链编辑的交互形态」原型出结果后再定，一块雾可能落成好几张工单，也可能不落。
-- 工作流 JSON 在桌面的最小格式、与移动版配方的兼容边界：线格式形状已由「核实工作流 JSON 的可复制性」给出，剩余取舍等「工作流的保存与载入范围」。
 - Windows/macOS 的打包形态：当前只要求编译通过，不预切成工单。
 - GUI 内是否只读集成 A1111 HTTP 的模型列表：当前排除，若将来重开范围应作为新一轮 effort。
 
