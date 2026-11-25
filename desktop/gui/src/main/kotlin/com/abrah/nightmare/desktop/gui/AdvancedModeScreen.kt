@@ -47,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.abrah.nightmare.desktop.canvas.Pt
+import com.abrah.nightmare.desktop.canvas.Viewport
 import com.abrah.nightmare.desktop.canvas.wirePath
 import com.abrah.nightmare.desktop.graph.DesktopNodeTypes
 
@@ -144,10 +145,9 @@ fun AdvancedModeScreen(
             ) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     snapshot.wires.forEach { wire ->
-                        val from = deviceViewport.toScreen(wire.from)
-                        val to = deviceViewport.toScreen(wire.to)
-                        val curve = wirePath(wire.from, wire.to)
-                        var previous = Offset(from.x, from.y)
+                        val curve = wireScreenPath(wire.from, wire.to, deviceViewport)
+                        val first = curve(0f)
+                        var previous = Offset(first.x, first.y)
                         for (step in 1..24) {
                             val point = curve(step / 24f)
                             val next = Offset(point.x, point.y)
@@ -400,3 +400,14 @@ private fun ResultBar(
 
 /** The same pure readout the copied canvas state layer uses. */
 private fun zoomLabel(scale: Float): String = "%.2fx".format(java.util.Locale.ROOT, scale)
+
+/**
+ * The shared curve is defined in world units (the same one `wireAt` hit-tests).
+ * Compose draws in pixels, so each sampled point goes through the viewport the
+ * nodes and ports use; mixing the two spaces misaligns wires when zoomed,
+ * panned or rendered at a non-1 device density (ADR-0006).
+ */
+internal fun wireScreenPath(from: Pt, to: Pt, viewport: Viewport): (Float) -> Pt {
+    val world = wirePath(from, to)
+    return { t -> viewport.toScreen(world(t)) }
+}
