@@ -4,7 +4,7 @@
 
 **Blocked by:** 18
 
-**Status:** ready-for-agent
+**Status:** wontfix
 
 **Optional:** yes
 
@@ -15,3 +15,4 @@
 ## Comments
 
 - 2026-11-25：从原 16 的 DiT 部分拆出；DiT 系模型可放弃时本工单也可放弃。
+- 2026-11-25：按用户决定直接关闭为 `wontfix`。原因：本机性能有限，DiT LoRA 不在 Phase 1 交付。未实现代码、未做 fake engine 或真实权重验证，验收框保持未勾选；本工单为 `Optional: yes`，不阻塞其他工单。

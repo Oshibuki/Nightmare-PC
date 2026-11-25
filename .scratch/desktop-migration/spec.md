@@ -100,6 +100,6 @@ Type: spec
   - Phase 0（01–10）：git 基线 → 固化引擎 SHA → 补丁 README/应用脚本 → 桌面骨架 → 复制 JVM 代码与测试 → agent 导航文档 → 引擎 vendor 构建 → CLI SD1.5 冒烟 → 补丁集清单 → Linux CI。
   - Phase 1 主线（11–14、16–17、24–25）：txt2img 完整 CLI → img2img → 模型目录与单文件 safetensors 导入 → SDXL → SD 原生 LoRA → 引擎 server 暴露 → Android API 层移植 → 真实 A1111 客户端认证。
   - Phase 1 可放弃分支（18–23）：GGUF/多文件加载通路 → 三模型 E2E → DiT LoRA；deferred 补丁定性独立。
-- **当前进度**：01–11、13 已 `resolved`；当前前沿为 12、14、16、17、18、22、24；19–21/23 被 18 阻塞，25 被 24 阻塞。
+- **当前进度**：01–14、16–18、22、24 已 `resolved`；19、20、21、23 已按用户决定关闭为 `wontfix`（`Optional: yes`，不阻塞交付）；当前前沿为 25。
 - **补丁资产盘点**：可移植约 125 个文件（根级 42 个编号 + dit 子目录约 55 个）；Hexagon/QNN 专属约 47 个；移动 GPU（Adreno OpenCL / MNN）专属约 11 个；待定性 12–15 个。上游链：local-dream `v3.0.0-alpha.4` → happyyzy/stable-diffusion.cpp → ggml-org/ggml。
 - **会话产物**：已完成工单 11 的“进度输出 stdout”进程级复核，并把该条补为工单 11 的显式验收项。

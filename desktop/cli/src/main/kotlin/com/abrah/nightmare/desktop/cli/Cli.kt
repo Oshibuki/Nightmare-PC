@@ -46,6 +46,7 @@ object Cli {
                 EXIT_OK
             }
             Txt2Img.NAME -> Txt2Img.run(args.drop(1), out, err, env)
+            Img2Img.NAME -> Img2Img.run(args.drop(1), out, err, env)
             Models.NAME -> Models.run(args.drop(1), out, err, env)
             Serve.NAME -> Serve.run(args.drop(1), out, err, env)
             else -> {
@@ -67,6 +68,7 @@ object Cli {
         |Usage:
         |  ${ProductIdentity.NAME} <option>
         |  ${ProductIdentity.NAME} txt2img --model <path> --prompt <text> --out <path> [options]
+        |  ${ProductIdentity.NAME} img2img --model <path> --init-img <path> --out <path> [options]
         |  ${ProductIdentity.NAME} txt2img --diffusion-model <gguf> --llm <gguf> --vae <file> --prompt <text> --out <path> [options]
         |  ${ProductIdentity.NAME} models list [--dir <path>]
         |  ${ProductIdentity.NAME} serve --model <path> [--port <1-65535>]
@@ -77,6 +79,7 @@ object Cli {
         |
         |Commands:
         |  txt2img        Generate images from a prompt with the vendored engine.
+        |  img2img        Rewrite an existing PNG with a prompt and a denoising strength.
         |  models list    List the models in the local library, with their format.
         |  serve          Run the engine's A1111-compatible local HTTP API.
         |
@@ -90,8 +93,10 @@ object Cli {
         |                                  and is mutually exclusive with --model.
         |      --llm <path>                Text encoder of that pipeline (required with
         |                                  --diffusion-model).
-        |      --vae <path>                VAE decoder of that pipeline (required with
-        |                                  --diffusion-model); .safetensors or .gguf.
+        |      --vae <path>                VAE weights: required with --diffusion-model
+        |                                  (multi-file DiT/GGUF), optional with --model
+        |                                  for a standalone SDXL VAE. .safetensors or
+        |                                  .gguf; checked before the engine starts.
         |      --llm_vision <path>         Vision encoder of that pipeline, e.g. the
         |                                  mmproj of Qwen Image (optional).
         |      --prompt <text>             Prompt to render (required).
@@ -117,8 +122,40 @@ object Cli {
         |                                  seed incrementing from --seed, and named
         |                                  <stem>-<i>.png after the first, which
         |                                  keeps the --out path.
+        |      --lora <file>[@mult]        SD LoRA to apply; the multiplier defaults
+        |                                  to 1 and may be negative. Repeat the flag
+        |                                  or comma-separate several: --lora a@0.6,b.
+        |      --lora-dir <path>           Folder holding the LoRA weights. Defaults
+        |                                  to ${'$'}NIGHTMARE_MODELS/lora, then
+        |                                  ~/${ModelLibrary.DEFAULT_SUBPATH}/lora.
         |      --engine <path>             sd-cli binary to run. Defaults to
         |                                  ${'$'}NIGHTMARE_SD_BIN, then ${Txt2Img.DEFAULT_ENGINE}.
+        |      --vae-tiling                Decode the VAE in tiles to lower memory
+        |                                  use at 1024x1024 and above. A bare flag
+        |                                  means on; --vae-tiling=false means off.
+        |      --vae-tile-size <WxH>       VAE tile size, e.g. 64x64. Engine default 32x32.
+        |      --vae-tile-overlap <float>  Tile overlap as a fraction between 0 and 1
+        |                                  (engine default 0.5).
+        |
+        |img2img options:
+        |      --model <path>              Model file to load (required, single-file
+        |                                  .safetensors; its header is checked).
+        |      --init-img <path>           Source PNG to rewrite (required). Its width
+        |                                  and height must be positive multiples of 8,
+        |                                  and default the output size when not given.
+        |      --out <path>                PNG file to write (required).
+        |      --strength <number>         Denoising strength in [0, 1] (default: 0.75).
+        |                                  0 keeps the source, 1 fully re-generates it.
+        |      --prompt <text>             Prompt to render (default: empty).
+        |      --negative-prompt <text>    Negative prompt (default: empty).
+        |      --width <int>               Output width, positive multiple of 8.
+        |      --height <int>              Output height, positive multiple of 8.
+        |      --steps <int>               Sampling steps, 1-150 (default: 20).
+        |      --sampler <name>            Sampling method (default: euler).
+        |      --scheduler <name>          Sigma schedule (default: discrete).
+        |      --cfg-scale <number>        Classifier-free guidance scale, > 0 (default: 7).
+        |      --seed <int>                RNG seed (default: 42). -1 draws a random seed.
+        |      --engine <path>             sd-cli binary to run (same defaults as txt2img).
         |
         |models list options:
         |      --dir <path>                Directory to scan. Defaults to
@@ -140,7 +177,8 @@ object Cli {
         |Progress goes to stdout: one "[i/N] seed=<seed> -> <path>" line per image,
         |then the engine's own output as it arrives. Each PNG carries an
         |A1111-style "parameters" chunk (prompt, negative prompt, steps, sampler,
-        |schedule, CFG scale, seed, size) so a batch can be reproduced later.
+        |schedule, CFG scale, seed, size, model, LoRAs) so a batch can be
+        |reproduced later. Prompt-embedded <lora:name:mult> tags are read too.
         |
         |Exit codes:
         |  0  the request was served (an empty model library included)

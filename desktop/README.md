@@ -106,6 +106,10 @@ that is not the PNG it claims to be), `2` the command line itself was wrong
 | `--seed` | 42 | any integer; `-1` draws one and reports it |
 | `--batch` | 1 | 1–16 |
 | `--engine` | `$NIGHTMARE_SD_BIN`, then `desktop/engine/build/bin/sd-cli` | a path |
+| `--vae` | unset (required with `--diffusion-model`) | path to readable safetensors/GGUF VAE weights; standalone SDXL VAE or multi-file decoder |
+| `--vae-tiling` | off | bare flag on; `--vae-tiling=false` off |
+| `--vae-tile-size` | engine default `32x32` | positive `WxH` |
+| `--vae-tile-overlap` | engine default `0.5` | number strictly between 0 and 1 |
 
 ### Multi-file DiT / GGUF models
 
