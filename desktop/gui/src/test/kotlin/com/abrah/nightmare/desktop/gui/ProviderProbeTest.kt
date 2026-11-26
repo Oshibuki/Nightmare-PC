@@ -163,4 +163,67 @@ class ProviderProbeTest {
 
         assertFalse("authorization" in request.lowercase())
     }
+
+    @Test(timeout = 10_000)
+    fun `a local models response without supported_parameters falls back to chat labels sorted`() {
+        // The shape measured on the local OpenAI-compatible server: no supported_parameters.
+        val transport = ProviderProbe.Transport { _, _, _, _ ->
+            JSONObject().put(
+                "data",
+                org.json.JSONArray()
+                    .put(
+                        JSONObject().put("id", "Flux-2-Klein-4B-Q4_K_S")
+                            .put("labels", org.json.JSONArray().put("custom").put("image").put("edit")),
+                    )
+                    .put(
+                        JSONObject().put("id", "Qwen3.5-4B-GGUF")
+                            .put("labels", org.json.JSONArray().put("chat").put("vision").put("tool-calling").put("hot")),
+                    )
+                    .put(
+                        JSONObject().put("id", "q4_k_xl")
+                            .put("labels", org.json.JSONArray().put("custom").put("vision").put("chat").put("tool-calling")),
+                    ),
+            ).toString()
+        }
+        val probe = ProviderProbe(transport = transport, today = { "2026-11-26" })
+
+        val ids = probe.models(ChatProviderConfig(Provider.CUSTOM, "http://127.0.0.1:13305/v1", "", ""))
+
+        assertEquals(listOf("Qwen3.5-4B-GGUF", "q4_k_xl"), ids)
+        assertEquals("Qwen3.5-4B-GGUF", ids.first()) // what autoModel picks with no typed model
+    }
+
+    @Test(timeout = 10_000)
+    fun `fitsChat stays the first choice when the response does carry supported_parameters`() {
+        val transport = ProviderProbe.Transport { _, _, _, _ ->
+            JSONObject().put(
+                "data",
+                org.json.JSONArray()
+                    .put(chatModel)
+                    .put(JSONObject().put("id", "labeled-only").put("labels", org.json.JSONArray().put("chat"))),
+            ).toString()
+        }
+        val probe = ProviderProbe(transport = transport, today = { "2026-11-26" })
+
+        val ids = probe.models(ChatProviderConfig(Provider.CUSTOM, "http://local.example/v1", "", ""))
+
+        assertEquals(listOf("chat-capable"), ids)
+    }
+
+    @Test(timeout = 10_000)
+    fun `hosted providers never use the local label fallback`() {
+        val transport = ProviderProbe.Transport { _, _, _, _ ->
+            JSONObject().put(
+                "data",
+                org.json.JSONArray()
+                    .put(JSONObject().put("id", "labeled-only").put("labels", org.json.JSONArray().put("chat"))),
+            ).toString()
+        }
+        val probe = ProviderProbe(transport = transport, today = { "2026-11-26" })
+
+        Provider.entries.filter { it != Provider.CUSTOM }.forEach { hosted ->
+            val ids = probe.models(ChatProviderConfig(hosted, "https://example.invalid/v1", "", ""))
+            assertEquals(hosted.name, emptyList<String>(), ids)
+        }
+    }
 }

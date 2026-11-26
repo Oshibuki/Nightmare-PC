@@ -115,8 +115,18 @@ class ChatProviderSettings(
 
     fun hasKey(): Boolean = resolved().key.isNotBlank()
 
-    /** The only configuration fact the shell is allowed to show — never a key. */
-    fun statusLabel(): String = if (hasKey()) "已配置" else "未配置"
+    /**
+     * The only configuration fact the shell is allowed to show — never a key.
+     * A keyless CUSTOM provider is a local server, not an unfinished setup.
+     */
+    fun statusLabel(): String {
+        val config = resolved()
+        return when {
+            config.key.isNotBlank() -> "已配置"
+            config.provider == Provider.CUSTOM -> "本地无需密钥"
+            else -> "未配置"
+        }
+    }
 
     companion object {
         const val ENV_PROVIDER = "NIGHTMARE_LLM_PROVIDER"

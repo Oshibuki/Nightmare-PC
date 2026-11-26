@@ -115,4 +115,36 @@ class ChatProviderSettingsTest {
         assertFalse("no key echo", shown.contains("topsecret"))
         assertFalse("no last four digits", shown.contains("4321"))
     }
+
+    @Test
+    fun `a keyless custom provider reports local no-key status instead of unconfigured`() {
+        env["NIGHTMARE_LLM_PROVIDER"] = "CUSTOM"
+        env["NIGHTMARE_LLM_BASE_URL"] = "http://127.0.0.1:13305/v1"
+        val settings = ChatProviderSettings(env = { env.toMap() })
+
+        assertEquals("本地无需密钥", settings.statusLabel())
+        assertFalse(settings.hasKey())
+    }
+
+    @Test
+    fun `a custom provider with a key still reports configured`() {
+        env["NIGHTMARE_LLM_PROVIDER"] = "CUSTOM"
+        env["NIGHTMARE_LLM_KEY"] = "custom-key-4321"
+        val settings = ChatProviderSettings(env = { env.toMap() })
+
+        assertEquals("已配置", settings.statusLabel())
+        assertTrue(settings.hasKey())
+    }
+
+    @Test
+    fun `all five hosted providers still report unconfigured with a blank key`() {
+        Provider.entries.filter { it != Provider.CUSTOM }.forEach { hosted ->
+            env.clear()
+            env["NIGHTMARE_LLM_PROVIDER"] = hosted.name
+            val settings = ChatProviderSettings(env = { env.toMap() })
+
+            assertEquals(hosted.name, "未配置", settings.statusLabel())
+            assertFalse(hosted.name, settings.hasKey())
+        }
+    }
 }
