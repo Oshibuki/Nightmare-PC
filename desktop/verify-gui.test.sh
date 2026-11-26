@@ -153,7 +153,7 @@ rc=$?
 assert_eq "no-cache run exits 0" 0 "$rc"
 assert_has_logs "$CASE_LOGS" \
   verify-gui-classes.log verify-gui-launch-config.log verify-gui-build.log \
-  verify-gui-fake-runner.log verify-gui-chat-turn.log \
+  verify-gui-fake-runner.log verify-gui-chat-turn.log verify-gui-img2img.log \
   verify-gui-persistence.log verify-gui-real-smoke.log
 assert_contains "launch-config runs by default" "$CASE_LOGS/verify-gui-launch-config.log" "verify-gui: launch-config OK"
 assert_not_contains "default run does not force --no-build-cache" "$STUB_CALLS" "--no-build-cache"
@@ -170,8 +170,18 @@ assert_contains "chat turn: one chat turn" "$STUB_CALLS" "com.abrah.nightmare.de
 assert_contains "chat turn: Ask answer path" "$STUB_CALLS" "com.abrah.nightmare.desktop.gui.AskSessionTest"
 assert_contains "chat turn: cancel/window-close path" "$STUB_CALLS" "com.abrah.nightmare.desktop.gui.TurnLifecycleTest"
 assert_called_after "$STUB_CALLS" "WorkflowRunnerTest" "FakeChatModelWorkflowTest"
-assert_called_after "$STUB_CALLS" "TurnLifecycleTest" "WorkflowPersistenceTest"
+assert_called_after "$STUB_CALLS" "TurnLifecycleTest" "DesktopToolCommandsTest"
+assert_called_after "$STUB_CALLS" "DesktopToolCommandsTest" "WorkflowPersistenceTest"
 assert_contains "chat turn step summary" "$CASE_LOGS/verify-gui-chat-turn.log" "verify-gui: chat-turn OK"
+# The img2img step names the classes that assert the fake-path contract:
+# the runner projection (--init-img/--strength, PNG into results), the
+# one-sentence chat turn (Picture bubble + run snapshot), and the tool schema
+# that carries the image node's path/strength. DesktopToolCommandsTest appears
+# only in this step, so it also marks the order against chat-turn/persistence.
+assert_contains "img2img: runner projection into --init-img/--strength" "$STUB_CALLS" "com.abrah.nightmare.desktop.gui.WorkflowRunnerTest"
+assert_contains "img2img: one chat sentence drives Picture bubble and snapshot" "$STUB_CALLS" "com.abrah.nightmare.desktop.gui.ChatSessionTest"
+assert_contains "img2img: tool schema carries path/strength" "$STUB_CALLS" "com.abrah.nightmare.desktop.gui.DesktopToolCommandsTest"
+assert_contains "img2img step summary" "$CASE_LOGS/verify-gui-img2img.log" "verify-gui: img2img OK"
 assert_contains "persistence test" "$STUB_CALLS" "WorkflowPersistenceTest"
 assert_not_contains "real smoke must not run without weights" "$STUB_CALLS" "Img2ImgRealE2ETest"
 assert_contains "pass summary" "$CASE_OUT" "verify-gui: PASS"
@@ -201,6 +211,7 @@ assert_contains "log location on failure" "$CASE_OUT" "$CASE_LOGS"
 assert_not_contains "no pass summary on failure" "$CASE_OUT" "verify-gui: PASS"
 assert_not_contains "fail fast: no fake runner after build failure" "$STUB_CALLS" "WorkflowRunnerTest"
 assert_not_contains "fail fast: no chat turn after build failure" "$STUB_CALLS" "FakeChatModelWorkflowTest"
+assert_not_contains "fail fast: no img2img after build failure" "$STUB_CALLS" "DesktopToolCommandsTest"
 
 # ---- case 3: weights + engine present -> real smoke runs ------------------
 
@@ -315,6 +326,7 @@ assert_eq "chat-turn failure exits with the stub code" 7 "$rc"
 assert_has_logs "$CASE_LOGS" verify-gui-chat-turn.log
 assert_contains "chat-turn failure captured in its log" "$CASE_LOGS/verify-gui-chat-turn.log" "stub forced failure"
 assert_contains "chat-turn failure named on stdout" "$CASE_OUT" "verify-gui: FAILED at chat-turn"
+assert_not_contains "no img2img after chat-turn failure" "$STUB_CALLS" "DesktopToolCommandsTest"
 assert_not_contains "no persistence after chat-turn failure" "$STUB_CALLS" "WorkflowPersistenceTest"
 assert_not_contains "no pass summary after chat-turn failure" "$CASE_OUT" "verify-gui: PASS"
 
@@ -334,7 +346,46 @@ rc=$?
 
 assert_eq "a hung chat-turn is killed by its hard timeout" 124 "$rc"
 assert_contains "timeout failure recorded in chat-turn log" "$CASE_LOGS/verify-gui-chat-turn.log" "verify-gui: FAILED at chat-turn (exit 124)"
+assert_not_contains "no img2img after chat-turn timeout" "$STUB_CALLS" "DesktopToolCommandsTest"
 assert_not_contains "no persistence after chat-turn timeout" "$STUB_CALLS" "WorkflowPersistenceTest"
+
+# ---- case 7a: a failing img2img step stops before persistence -------------
+
+CASE_LOGS="$TMP/logs-img2img-fail"
+CASE_OUT="$TMP/out-img2img-fail"
+mkdir -p "$CASE_LOGS"
+: > "$STUB_CALLS"
+STUB_FAIL_ON="DesktopToolCommandsTest" \
+NIGHTMARE_MODELS="$TMP/no-such-models" \
+VERIFY_GUI_GRADLE="$STUB" \
+VERIFY_GUI_LOG_DIR="$CASE_LOGS" \
+timeout 30 bash "$SCRIPT" > "$CASE_OUT" 2>&1
+rc=$?
+
+assert_eq "img2img failure exits with the stub code" 7 "$rc"
+assert_has_logs "$CASE_LOGS" verify-gui-img2img.log
+assert_contains "img2img failure captured in its log" "$CASE_LOGS/verify-gui-img2img.log" "stub forced failure"
+assert_contains "img2img failure named on stdout" "$CASE_OUT" "verify-gui: FAILED at img2img"
+assert_not_contains "no persistence after img2img failure" "$STUB_CALLS" "WorkflowPersistenceTest"
+assert_not_contains "no pass summary after img2img failure" "$CASE_OUT" "verify-gui: PASS"
+
+# ---- case 7b: img2img is bounded by its own hard timeout ------------------
+
+CASE_LOGS="$TMP/logs-img2img-timeout"
+CASE_OUT="$TMP/out-img2img-timeout"
+mkdir -p "$CASE_LOGS"
+: > "$STUB_CALLS"
+STUB_HANG_ON="DesktopToolCommandsTest" \
+VERIFY_GUI_IMG2IMG_TIMEOUT=1 \
+NIGHTMARE_MODELS="$TMP/no-such-models" \
+VERIFY_GUI_GRADLE="$STUB" \
+VERIFY_GUI_LOG_DIR="$CASE_LOGS" \
+timeout 30 bash "$SCRIPT" > "$CASE_OUT" 2>&1
+rc=$?
+
+assert_eq "a hung img2img is killed by its hard timeout" 124 "$rc"
+assert_contains "timeout failure recorded in img2img log" "$CASE_LOGS/verify-gui-img2img.log" "verify-gui: FAILED at img2img (exit 124)"
+assert_not_contains "no persistence after img2img timeout" "$STUB_CALLS" "WorkflowPersistenceTest"
 
 # ---- case 8: no explicit engine -> real-smoke uses the Vulkan wrapper ------
 
