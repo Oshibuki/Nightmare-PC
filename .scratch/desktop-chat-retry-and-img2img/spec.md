@@ -1,9 +1,13 @@
 # Spec: 对话模式重试与图生图首切片
 
-Status: ready-for-agent
+Status: resolved
 Type: spec
 
 > 领域术语见根 `GLOSSARY.md`（交互模式、对话回合、工作流、节点类型、运行态、进度事件、验收脚本、重试、图生图）；决策依据见 `.scratch/desktop-chat-retry-and-img2img/map.md` 与四张决策工单的 Answer，反直觉取舍见 ADR-0007、0009、0011、0013。本规格是把已清空的地图交棒给实现的产物，不重新设计。
+
+## Completion (2026-11-26)
+
+4 张实现工单（05–08）全部 `resolved` 并合并到 `main`（合并提交 `73e50ee`，经 code-review 修复 `6e4ef34`）。真 provider 应用内端到端验证另记于 `.scratch/real-provider-verification/`；工具面扩展与确认型 Ask 见后续 effort（ADR-0014/0015）。
 
 ## Problem Statement
 

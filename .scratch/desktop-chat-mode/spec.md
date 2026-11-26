@@ -1,9 +1,13 @@
 # Spec: 桌面 GUI 对话出图模式
 
-Status: ready-for-agent
+Status: resolved
 Type: spec
 
 > 领域术语见根 `GLOSSARY.md`（工作流、节点类型、交互模式、对话回合、结构化追问、运行态、进度事件、验收脚本）；决策依据见 `.scratch/desktop-chat-mode/map.md` 与工单 01–07 的 Answer，反直觉取舍见 ADR-0006～0012。本规格是把那张已清空的地图交棒给实现的产物，不重新设计。
+
+## Completion (2026-11-26)
+
+6 张实现工单（08–13）全部 `resolved` 并合并到 `main`（合并提交 `09e761a`，经 code-review 与修复 `2decbdf` 类同款流程）。验证证据见工单 `## Comments` 与 `verify-gui.sh` 的 chat-turn/img2img 步。后续增量（重试、图生图首切片、工具面扩展）见各自 effort。
 
 ## Problem Statement
 

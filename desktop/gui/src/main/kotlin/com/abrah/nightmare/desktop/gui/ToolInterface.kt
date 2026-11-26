@@ -10,6 +10,8 @@ import com.abrah.nightmare.desktop.graph.isSafeNodeId
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.URI
+import java.nio.file.Files
 import java.nio.file.Path
 
 /**
@@ -51,7 +53,7 @@ sealed interface ToolCommand {
     /** Read the shared 工作流 back, so a model can see what its edits produced. */
     data object GetCanvas : ToolCommand
 
-    /** Explicit save-only write; no prompt/Ask is involved (ADR-0014). */
+    /** Save the workflow; an existing target needs a confirmation 结构化追问 (ADR-0015). */
     data class SaveFlow(val path: String) : ToolCommand
 
     /** [dir] overrides $NIGHTMARE_MODELS / the shared cache for one call. */
@@ -59,6 +61,15 @@ sealed interface ToolCommand {
 
     /** Read-only LoRA enumeration; no search, download or delete (ADR-0014). */
     data class ListLoras(val dir: String? = null) : ToolCommand
+
+    /**
+     * Delete one LoRA below the model root's lora tree. [dir] overrides the
+     * shared library root for one call, like [ListLoras].
+     */
+    data class DeleteLora(val path: String, val dir: String? = null) : ToolCommand
+
+    /** Download a LoRA from [url] into the shared library's lora tree. */
+    data class DownloadLora(val url: String, val dir: String? = null) : ToolCommand
 }
 
 /** Observable outcome of one tool call; a rejected call leaves the workflow untouched. */
@@ -76,11 +87,29 @@ sealed interface ToolResult {
 class ToolInterface(
     private val session: WorkflowSession,
     private val runControl: WorkflowRunControl,
+    /**
+     * Fallback confirm seam for callers that dispatch directly (e.g. the replay
+     * reset). Confirmation tools treat anything but their affirmative option as
+     * a cancellation, so this default can never overwrite or delete by itself.
+     * Production goes through [DesktopToolBox], which passes its injected ask.
+     */
+    private val defaultAsk: (String, List<String>) -> String = { _, _ -> AskGate.CANCEL },
+    /** Injected for JVM tests; production uses bounded HttpURLConnection (ADR-0015). */
+    private val downloader: LoraDownloader = HttpLoraDownloader,
+    /** Sources at or above this size need a confirmation 结构化追问 (mobile's 512 MB rule). */
+    private val largeFileBytes: Long = DEFAULT_LARGE_LORA_BYTES,
 ) {
     /** Convenience wiring: the state already owns the session and the run control. */
     constructor(state: DefaultModeState) : this(state.sharedSession, state)
 
-    fun dispatch(command: ToolCommand): ToolResult = when (command) {
+    fun dispatch(command: ToolCommand): ToolResult = dispatch(command, defaultAsk)
+
+    /**
+     * One tool call at the state seam. [ask] is the confirmation-type 结构化追问
+     * function injected at the GUI layer (ADR-0015); it is only consulted by
+     * tools with a side effect the person must approve.
+     */
+    fun dispatch(command: ToolCommand, ask: (String, List<String>) -> String): ToolResult = when (command) {
         is ToolCommand.NewWorkflow, is ToolCommand.NewFlow -> {
             session.replaceWorkflow(WorkflowPersistence.newWorkflow())
             ToolResult.Ok("新建空工作流")
@@ -151,6 +180,13 @@ class ToolInterface(
         is ToolCommand.GetCanvas -> ToolResult.Ok(session.workflow.toJson())
 
         is ToolCommand.SaveFlow -> {
+            val existing = command.path.trim().let { runCatching { Path.of(it) }.getOrNull() }
+            if (existing != null && Files.exists(existing)) {
+                // Only the affirmative option overwrites. The person's 取消, an
+                // AskGate CANCEL and a timeout all land on the same safe branch.
+                val answer = ask(SAVE_OVERWRITE_QUESTION, listOf(SAVE_OPTION, CANCEL_OPTION))
+                if (answer != SAVE_OPTION) return ToolResult.Ok("已取消覆盖保存：$existing")
+            }
             val feedback = session.saveTo(command.path)
             if (feedback.ok) ToolResult.Ok(feedback.message) else ToolResult.Rejected(feedback.message)
         }
@@ -158,6 +194,10 @@ class ToolInterface(
         is ToolCommand.ListModels -> modelInventory(command.dir)
 
         is ToolCommand.ListLoras -> loraInventory(command.dir)
+
+        is ToolCommand.DeleteLora -> deleteLora(command, ask)
+
+        is ToolCommand.DownloadLora -> downloadLora(command, ask)
     }
 
     /**
@@ -231,6 +271,75 @@ class ToolInterface(
     }
 
     /**
+     * Download a LoRA into `root/loras`. An announced size at or above the
+     * threshold needs an affirmative confirmation 结构化追问; a cancel (or a
+     * CANCEL/timeout from AskGate) returns before any file or directory is
+     * written. The destination never includes a URL query, so a signed URL's
+     * token cannot leak into the tool result or the file name.
+     */
+    private fun downloadLora(
+        command: ToolCommand.DownloadLora,
+        ask: (String, List<String>) -> String,
+    ): ToolResult {
+        val root = ModelLibrary.resolve(command.dir, System.getenv()).toAbsolutePath().normalize()
+        val name = loraFileName(command.url)
+            ?: return ToolResult.Rejected("无法从下载地址确定 LoRA 文件名")
+        val dest = root.resolve("loras").resolve(name).normalize()
+        if (!dest.startsWith(root)) return ToolResult.Rejected("下载目标越出模型根目录：$name")
+
+        val announced = try {
+            downloader.contentLength(command.url)
+        } catch (e: IOException) {
+            return ToolResult.Rejected("无法读取 LoRA 大小：${e.message}")
+        }
+        if (announced > 0 && announced >= largeFileBytes) {
+            val megabytes = announced / (1024 * 1024)
+            val answer = ask("LoRA 文件约 $megabytes MB，确认下载？", listOf(DOWNLOAD_OPTION, CANCEL_OPTION))
+            if (answer != DOWNLOAD_OPTION) return ToolResult.Ok("已取消下载 LoRA：$name")
+        }
+        return try {
+            val bytes = downloader.download(command.url, dest)
+            ToolResult.Ok("已下载 LoRA：$dest（$bytes 字节）")
+        } catch (e: IOException) {
+            ToolResult.Rejected("下载 LoRA 失败：${e.message}")
+        }
+    }
+
+    /** Keep only a safe file name from the URL path; add the LoRA extension. */
+    private fun loraFileName(url: String): String? {
+        val raw = runCatching { URI(url).path.substringAfterLast('/') }.getOrNull()?.trim()
+        if (raw.isNullOrEmpty() || raw == "." || raw == "..") return null
+        val safe = raw.map { c -> if (c.isLetterOrDigit() || c in "._-") c else '_' }.joinToString("")
+        return if (safe.endsWith(".safetensors", ignoreCase = true)) safe else "$safe.safetensors"
+    }
+
+    /**
+     * Delete a LoRA only after an affirmative confirmation 结构化追问. Both the
+     * root containment check and [isLoraFile] are reused from the read-only
+     * inventory, so delete can never reach a checkpoint or a path outside the
+     * library. A cancel, an AskGate CANCEL and a timeout all skip the delete.
+     */
+    private fun deleteLora(command: ToolCommand.DeleteLora, ask: (String, List<String>) -> String): ToolResult {
+        val root = ModelLibrary.resolve(command.dir, System.getenv()).toAbsolutePath().normalize()
+        val target = runCatching { Path.of(command.path.trim()).toAbsolutePath().normalize() }.getOrNull()
+            ?: return ToolResult.Rejected("无效的 LoRA 路径：${command.path}")
+        if (!target.startsWith(root) || !isLoraFile(target, root)) {
+            return ToolResult.Rejected("路径不在 LoRA 目录内：${command.path}")
+        }
+        if (!Files.isRegularFile(target)) {
+            return ToolResult.Rejected("LoRA 文件不存在：${command.path}")
+        }
+        val answer = ask("删除 LoRA：${target.fileName}?", listOf(DELETE_OPTION, CANCEL_OPTION))
+        if (answer != DELETE_OPTION) return ToolResult.Ok("已取消删除 LoRA：${target.fileName}")
+        return try {
+            Files.delete(target)
+            ToolResult.Ok("已删除 LoRA：$target")
+        } catch (e: IOException) {
+            ToolResult.Rejected("删除 LoRA 失败：${e.message}")
+        }
+    }
+
+    /**
      * A LoRA here is a `.safetensors` below (but not at) the scan root, under a
      * directory named with "lora". Excluding the root itself keeps a library
      * folder such as `.../my-loras` from turning every checkpoint into a LoRA.
@@ -243,5 +352,16 @@ class ToolInterface(
             parent = parent.parent
         }
         return false
+    }
+
+    companion object {
+        /** Mobile's ASK_ABOVE_MB threshold, in bytes (512 MB). */
+        const val DEFAULT_LARGE_LORA_BYTES = 512L * 1024 * 1024
+
+        const val SAVE_OVERWRITE_QUESTION = "覆盖已保存的工作流?"
+        const val SAVE_OPTION = "保存"
+        const val DELETE_OPTION = "删除"
+        const val DOWNLOAD_OPTION = "下载"
+        const val CANCEL_OPTION = "取消"
     }
 }
