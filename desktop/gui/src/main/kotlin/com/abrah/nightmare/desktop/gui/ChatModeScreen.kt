@@ -40,8 +40,9 @@ import com.abrah.nightmare.desktop.graph.Node
 /**
  * 对话模式 shell (prototype variant B): a single chat column is the body, the
  * one workflow is a breadcrumb across the top, and the existing result/log
- * panels stay on the right. Ask bubbles are a read-only placeholder here —
- * their option interaction belongs to ticket 11.
+ * panels stay on the right. Ask bubbles are clickable here: a tap releases the
+ * in-flight turn through [ChatSession.answer], and typing instead releases that
+ * same Ask with CANCEL before [ChatSession.send] starts a new turn.
  */
 @Composable
 fun ChatModeScreen(
@@ -75,12 +76,15 @@ fun ChatModeScreen(
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 20.dp, vertical = 12.dp),
                 ) {
-                    items.forEach { bubble -> ChatBubble(bubble) }
+                    items.forEach { bubble ->
+                        ChatBubble(bubble, onAnswer = { id, option -> state.answer(id, option) })
+                    }
                 }
                 ChatComposer(
                     draft = draft,
                     onDraftChange = { draft = it },
                     running = state.running,
+                    awaitingAsk = state.awaitingAsk,
                     onSend = {
                         val text = draft.trim()
                         if (text.isNotBlank() && state.send(text)) draft = ""
@@ -147,7 +151,7 @@ private fun ChatBreadcrumb(
 }
 
 @Composable
-private fun ChatBubble(item: ChatItem) {
+private fun ChatBubble(item: ChatItem, onAnswer: (id: Int, option: String) -> Unit) {
     val mine = item is ChatItem.User
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
@@ -199,10 +203,27 @@ private fun ChatBubble(item: ChatItem) {
                 }
 
                 is ChatItem.Ask -> {
-                    // Placeholder only: option buttons are ticket 11's work.
-                    Text("追问 · 选项交互待开放", color = Color(0xFF8A6A22), fontSize = 11.sp)
+                    Text("追问", color = Color(0xFF8A6A22), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     Text(item.question, color = ink)
-                    item.options.forEach { option -> Text("· $option", color = ink, fontSize = 12.sp) }
+                    if (item.answer == AskGate.CANCEL) {
+                        Text("已取消", color = Color(0xFF8A6A22), fontSize = 12.sp)
+                    } else {
+                        item.options.forEach { option ->
+                            val chosen = item.answer == option
+                            Button(
+                                onClick = { onAnswer(item.id, option) },
+                                enabled = item.answer == null,
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    backgroundColor = if (chosen) Color(0xFFE2C678) else Color.White,
+                                    contentColor = Color(0xFF243049),
+                                ),
+                            ) {
+                                Text(if (chosen) "✓ $option" else option, fontSize = 12.sp)
+                            }
+                        }
+                        item.answer?.let { Text("已选择：$it", color = ink, fontSize = 11.sp) }
+                    }
                 }
 
                 is ChatItem.Log -> Unit // never a bubble: 引擎日志 lives in RunLogPanel.
@@ -216,6 +237,7 @@ private fun ChatComposer(
     draft: String,
     onDraftChange: (String) -> Unit,
     running: Boolean,
+    awaitingAsk: Boolean,
     onSend: () -> Unit,
 ) {
     Row(
@@ -225,17 +247,23 @@ private fun ChatComposer(
         OutlinedTextField(
             value = draft,
             onValueChange = onDraftChange,
-            label = { Text("说一句，让 AI 改工作流并出图") },
+            label = {
+                Text(
+                    if (awaitingAsk) "追问中 · 输入新指令会先放行这次追问"
+                    else "说一句，让 AI 改工作流并出图",
+                )
+            },
             modifier = Modifier.weight(1f),
             maxLines = 3,
         )
         Spacer(modifier = Modifier.width(8.dp))
-        if (running) {
+        if (running && !awaitingAsk) {
             Text("运行中", color = Color(0xFF66738C), fontSize = 12.sp)
             Spacer(modifier = Modifier.width(8.dp))
         }
-        Button(onClick = onSend, enabled = !running && draft.isNotBlank()) {
-            Text(if (running) "运行中" else "发送")
+        // An Ask wait is not busy work: typing here is the documented bypass.
+        Button(onClick = onSend, enabled = (!running || awaitingAsk) && draft.isNotBlank()) {
+            Text(if (running && !awaitingAsk) "运行中" else if (awaitingAsk) "发送新指令" else "发送")
         }
     }
 }
