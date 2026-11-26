@@ -86,6 +86,34 @@ class ChatSessionTest {
     }
 
     @Test
+    fun `the system prompt teaches the model the tools node types ids and ports`() {
+        val model = ScriptChatModel(words("ok"))
+        val chat = ChatSession(
+            model = model,
+            postToUi = { it.run() },
+            startTurn = { it.run() },
+        )
+
+        assertTrue(chat.send("hello"))
+
+        val system = model.seen.single().getJSONObject(0)
+        assertEquals("system", system.getString("role"))
+        val text = system.getString("content")
+        listOf("new_workflow", "add_node", "set_parameter", "connect", "run").forEach { tool ->
+            assertTrue("$tool should be named in the system prompt: $text", text.contains(tool))
+        }
+        listOf(
+            DesktopNodeTypes.PROMPT,
+            DesktopNodeTypes.SD_SAMPLER,
+            DesktopNodeTypes.OUTPUT,
+        ).forEach { type -> assertTrue("$type should be legal in the system prompt: $text", text.contains(type)) }
+        assertTrue("id rule is stated: $text", text.contains("_") && text.contains("-"))
+        assertTrue("port names are stated: $text", text.contains("prompt") && text.contains("image"))
+        assertTrue("all values are strings: $text", text.contains("字符串"))
+        assertTrue("the typical order is stated: $text", text.indexOf("new_workflow") < text.indexOf("run"))
+    }
+
+    @Test
     fun `without a configured provider the turn ends in an explicit error bubble`() {
         val chat = ChatSession(
             postToUi = { it.run() },
