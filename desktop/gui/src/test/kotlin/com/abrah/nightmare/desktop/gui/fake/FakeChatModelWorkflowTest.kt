@@ -5,7 +5,6 @@ import com.abrah.nightmare.agent.ChatItem
 import com.abrah.nightmare.desktop.graph.DesktopNodeTypes
 import com.abrah.nightmare.desktop.graph.Workflow
 import com.abrah.nightmare.desktop.gui.DefaultModeState
-import com.abrah.nightmare.desktop.gui.RunConfig
 import com.abrah.nightmare.desktop.gui.RunStatus
 import com.abrah.nightmare.desktop.gui.ToolInterface
 import com.abrah.nightmare.desktop.gui.WorkflowRunner
@@ -13,10 +12,7 @@ import com.abrah.nightmare.desktop.gui.WorkflowSession
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assume
 import org.junit.Test
-import java.io.File
-import java.nio.file.Files
 
 class FakeChatModelWorkflowTest {
 
@@ -58,7 +54,7 @@ class FakeChatModelWorkflowTest {
     @Test
     fun `a fake chat model drives all five ToolInterface commands into a real run`() {
         assumePosix()
-        val (config, png) = fakeCliPng()
+        val (config, png) = fakeCliPng("fake-chatmodel-test", "tool-result.png", captureArgv = true)
         val session = WorkflowSession(Workflow())
         val state = DefaultModeState(session, WorkflowRunner(config))
         val tools = ToolInterface(state)
@@ -99,31 +95,5 @@ class FakeChatModelWorkflowTest {
         assertTrue("the built prompt reached the CLI: ${run.command}", run.command.contains("tool-built dawn"))
     }
 
-    // ---- harness (mirrors ToolInterfaceTest.fakeCliPng) --------------------
-
-    private fun assumePosix() {
-        Assume.assumeFalse(
-            "fake CLI runner is a POSIX shell script",
-            System.getProperty("os.name").startsWith("Windows"),
-        )
-    }
-
-    private fun fakeCliPng(): Pair<RunConfig, File> {
-        val dir = Files.createTempDirectory("fake-chatmodel-test").toFile()
-        val png = File(dir, "tool-result.png")
-        val argv = File(dir, "argv.txt")
-        val script = File(dir, "fake-cli.sh")
-        val quote = { s: String -> "'" + s.replace("'", "'\\''") + "'" }
-        script.writeText(
-            buildString {
-                append("#!/bin/sh\n")
-                append("printf '%s\\n' \"\$@\" > ${quote(argv.path)}\n")
-                append("echo ${quote("[1/1] seed=11 -> ${png.path}")}\n")
-                append(": > ${quote(png.path)}\n")
-                append("exit 0\n")
-            },
-        )
-        script.setExecutable(true)
-        return RunConfig(cliExecutable = script.path, outputPath = png.path, timeoutMillis = 10_000L) to png
-    }
+    // ---- harness: POSIX fake CLI + bounded waits come from ChatTestHarness --
 }
