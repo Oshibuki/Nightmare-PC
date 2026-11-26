@@ -14,6 +14,9 @@ dependencies {
     implementation(project(":core"))
     // JVM state tests assert observable run state without a UI test framework.
     testImplementation(libs.junit)
+    // Test doubles ported from the mobile agent use org.json directly; :core's
+    // `implementation` is not on this module's compile classpath.
+    testImplementation(libs.json)
 }
 
 tasks.test {
