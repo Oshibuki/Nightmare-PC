@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.sp
 fun DefaultModeScreen(
     state: DefaultModeState = remember { DefaultModeState() },
     onSwitchToAdvanced: () -> Unit = {},
+    onSwitchToChat: () -> Unit = {},
 ) {
     var revision by remember { mutableIntStateOf(0) }
     DisposableEffect(state) {
@@ -73,6 +74,7 @@ fun DefaultModeScreen(
             },
             onCancel = { WorkflowRunner.cancelActiveProcess(state.runHandle()) },
             onSwitchToAdvanced = onSwitchToAdvanced,
+            onSwitchToChat = onSwitchToChat,
             timeoutMinutes = timeoutMinutes,
             onTimeoutChange = { text ->
                 timeoutMinutes = text
@@ -112,6 +114,7 @@ private fun ChainRail(
     onRun: () -> Unit,
     onCancel: () -> Unit,
     onSwitchToAdvanced: () -> Unit,
+    onSwitchToChat: () -> Unit,
     timeoutMinutes: String,
     onTimeoutChange: (String) -> Unit,
 ) {
@@ -124,6 +127,8 @@ private fun ChainRail(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Button(onClick = onSwitchToAdvanced) { Text("高级模式") }
+        Spacer(modifier = Modifier.width(8.dp))
+        Button(onClick = onSwitchToChat) { Text("对话模式") }
         Spacer(modifier = Modifier.width(12.dp))
         snapshot.chips.forEachIndexed { index, chip ->
             if (index > 0) {
@@ -202,7 +207,7 @@ private fun RunStatusBanner(runState: RunSnapshot, modifier: Modifier = Modifier
 }
 
 @Composable
-private fun ResultPreview(
+internal fun ResultPreview(
     preview: PreviewInfo,
     results: List<ResultArtifact>,
     status: RunStatus,
@@ -258,7 +263,7 @@ private fun paramsSummary(params: Map<String, String>): String = listOfNotNull(
 
 /** One panel for both structured progress events and unmodified engine output. */
 @Composable
-private fun RunLogPanel(runState: RunSnapshot, modifier: Modifier = Modifier) {
+internal fun RunLogPanel(runState: RunSnapshot, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier.background(Color(0xFF141A26)).padding(horizontal = 16.dp, vertical = 10.dp),
     ) {

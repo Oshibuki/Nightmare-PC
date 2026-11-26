@@ -8,7 +8,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.singleWindowApplication
 
-private enum class InteractionMode { DEFAULT, ADVANCED }
+private enum class InteractionMode { DEFAULT, ADVANCED, CHAT }
 
 /** Entry point for the Compose Desktop shell: both modes over one 工作流 session. */
 fun main() = singleWindowApplication(
@@ -22,6 +22,10 @@ fun main() = singleWindowApplication(
     val runner = remember { WorkflowRunner() }
     val defaultState = remember(session, runner) { DefaultModeState(session, runner) }
     val advancedState = remember(session, runner) { AdvancedModeState(session, runner) }
+    // One chat state for the whole window: bubbles and the agent's history stay
+    // in memory across mode switches. The session/runner above are still the
+    // single workflow and run state all three shells share (ADR-0008/0009).
+    val chatState = remember(session, runner) { ChatSession(session, runner) }
     // Window close disposes this effect (a mode switch does not), so a run
     // started in either mode is ended once for the whole window (ADR-0009).
     DisposableEffect(runner) {
@@ -33,11 +37,19 @@ fun main() = singleWindowApplication(
             InteractionMode.DEFAULT -> DefaultModeScreen(
                 state = defaultState,
                 onSwitchToAdvanced = { mode.value = InteractionMode.ADVANCED },
+                onSwitchToChat = { mode.value = InteractionMode.CHAT },
             )
 
             InteractionMode.ADVANCED -> AdvancedModeScreen(
                 state = advancedState,
                 onSwitchToDefault = { mode.value = InteractionMode.DEFAULT },
+                onSwitchToChat = { mode.value = InteractionMode.CHAT },
+            )
+
+            InteractionMode.CHAT -> ChatModeScreen(
+                state = chatState,
+                onSwitchToDefault = { mode.value = InteractionMode.DEFAULT },
+                onSwitchToAdvanced = { mode.value = InteractionMode.ADVANCED },
             )
         }
     }
