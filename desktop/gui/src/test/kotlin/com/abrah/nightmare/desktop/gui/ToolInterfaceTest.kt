@@ -187,6 +187,88 @@ class ToolInterfaceTest {
     }
 
     @Test
+    fun `delete_lora confirms first, keeps the file on cancel and refuses paths outside the lora tree`() {
+        val root = Files.createTempDirectory("tool-delete-lora")
+        val lora = root.resolve("loras/character/gone.safetensors")
+        writeSafetensors(lora)
+        val outside = root.resolve("checkpoints/base.safetensors")
+        writeSafetensors(outside)
+        val tools = ToolInterface(WorkflowSession(), StubRunControl())
+        val asked = mutableListOf<Pair<String, List<String>>>()
+
+        val cancelled = tools.dispatch(ToolCommand.DeleteLora(lora.toString(), root.toString())) { q, opts ->
+            asked += q to opts
+            "取消"
+        }
+        assertTrue(cancelled is ToolResult.Ok)
+        assertTrue("a cancel must not delete", Files.exists(lora))
+        assertEquals(1, asked.size)
+        assertTrue("the question must name a LoRA: ${asked.single().first}", asked.single().first.contains("LoRA"))
+        assertEquals(listOf("删除", "取消"), asked.single().second)
+
+        val escaped = tools.dispatch(ToolCommand.DeleteLora(outside.toString(), root.toString())) { q, _ ->
+            throw AssertionError("a path outside the lora tree must not ask: $q")
+        }
+        assertTrue(escaped is ToolResult.Rejected)
+        assertTrue("an out-of-tree file must never be deleted", Files.exists(outside))
+
+        val removed = tools.dispatch(ToolCommand.DeleteLora(lora.toString(), root.toString())) { _, _ -> "删除" }
+        assertTrue(removed is ToolResult.Ok)
+        assertFalse("a confirmed delete must remove the file", Files.exists(lora))
+    }
+
+    @Test
+    fun `download_lora uses the fake transport, asks only above the threshold and writes nothing on cancel`() {
+        val root = Files.createTempDirectory("tool-download-lora")
+        val small = FakeLoraDownloader(size = 10L)
+        val smallTools = ToolInterface(WorkflowSession(), StubRunControl(), downloader = small, largeFileBytes = 100L)
+        val unexpected: (String, List<String>) -> String = { q, _ -> throw AssertionError("small download must not ask: $q") }
+
+        val smallResult = smallTools.dispatch(
+            ToolCommand.DownloadLora("https://example.invalid/small.safetensors", root.toString()),
+            unexpected,
+        )
+        assertTrue(smallResult is ToolResult.Ok)
+        assertEquals(1, small.downloadCalls)
+        assertTrue(Files.exists(root.resolve("loras/small.safetensors")))
+
+        val large = FakeLoraDownloader(size = 1_000L)
+        val largeTools = ToolInterface(WorkflowSession(), StubRunControl(), downloader = large, largeFileBytes = 100L)
+        val asked = mutableListOf<Pair<String, List<String>>>()
+        val url = "https://example.invalid/big.safetensors"
+        val cancelled = largeTools.dispatch(ToolCommand.DownloadLora(url, root.toString())) { q, opts ->
+            asked += q to opts
+            "取消"
+        }
+        assertTrue(cancelled is ToolResult.Ok)
+        assertEquals(0, large.downloadCalls)
+        assertFalse("a cancel must not touch the disk", Files.exists(root.resolve("loras/big.safetensors")))
+        assertEquals(listOf("下载", "取消"), asked.single().second)
+
+        val confirmed = largeTools.dispatch(ToolCommand.DownloadLora(url, root.toString())) { _, _ -> "下载" }
+        assertTrue(confirmed is ToolResult.Ok)
+        assertEquals(1, large.downloadCalls)
+        assertTrue(Files.exists(root.resolve("loras/big.safetensors")))
+    }
+
+    @Test
+    fun `download_lora derives a safe file name from the URL and never echoes a query token`() {
+        val root = Files.createTempDirectory("tool-download-name")
+        val fake = FakeLoraDownloader(size = 1L)
+        val tools = ToolInterface(WorkflowSession(), StubRunControl(), downloader = fake, largeFileBytes = 100L)
+
+        val result = tools.dispatch(
+            ToolCommand.DownloadLora(
+                "https://example.invalid/cute%20fox.safetensors?token=secret-value",
+                root.toString(),
+            ),
+        ) { _, _ -> "下载" }
+        assertTrue(result is ToolResult.Ok)
+        assertTrue("the name must be sanitized: ${fake.lastDest}", Files.exists(root.resolve("loras/cute_fox.safetensors")))
+        assertFalse("a URL token must not leak: ${(result as ToolResult.Ok).summary}", result.summary.contains("secret-value"))
+    }
+
+    @Test
     fun `list_models reports the readable models a directory holds and rejects a missing root`() {
         val dir = Files.createTempDirectory("tool-list-models")
         val model = dir.resolve("checkpoints/dream.safetensors")
@@ -231,6 +313,41 @@ class ToolInterfaceTest {
         val rejected = tools.dispatch(ToolCommand.SaveFlow(fileNotDir.resolve("flow.json").toString()))
         assertTrue(rejected is ToolResult.Rejected)
         assertTrue("the failure must reach the caller: $rejected", (rejected as ToolResult.Rejected).reason.contains("不可写"))
+    }
+
+    @Test
+    fun `save_flow asks before overwriting a file and a cancel leaves the old file untouched`() {
+        val dir = Files.createTempDirectory("tool-save-confirm")
+        val target = dir.resolve("flow.json")
+        val original = "an earlier workflow"
+        Files.writeString(target, original)
+        val session = WorkflowSession()
+        val tools = ToolInterface(session, DefaultModeState(session))
+        val asked = mutableListOf<Pair<String, List<String>>>()
+
+        val cancelled = tools.dispatch(ToolCommand.SaveFlow(target.toString())) { q, opts ->
+            asked += q to opts
+            "取消"
+        }
+        assertTrue(cancelled is ToolResult.Ok)
+        assertEquals(original, Files.readString(target))
+        assertEquals(listOf("覆盖已保存的工作流?" to listOf("保存", "取消")), asked)
+
+        val saved = tools.dispatch(ToolCommand.SaveFlow(target.toString())) { _, _ -> "保存" }
+        assertTrue(saved is ToolResult.Ok)
+        val loaded = WorkflowPersistence.load(target)
+        assertTrue(loaded is WorkflowResult.Ok)
+        assertEquals(session.workflow, (loaded as WorkflowResult.Ok).value)
+    }
+
+    @Test
+    fun `save_flow asks nothing when the target file does not exist`() {
+        val target = Files.createTempDirectory("tool-save-new").resolve("fresh.json")
+        val tools = ToolInterface(WorkflowSession(), StubRunControl())
+        val unexpected: (String, List<String>) -> String = { q, _ -> throw AssertionError("unexpected ask: $q") }
+
+        assertTrue(tools.dispatch(ToolCommand.SaveFlow(target.toString()), unexpected) is ToolResult.Ok)
+        assertTrue(Files.exists(target))
     }
 
     @Test
@@ -332,6 +449,25 @@ class ToolInterfaceTest {
         buffer.put(bytes)
         Files.createDirectories(path.parent)
         Files.write(path, buffer.array())
+    }
+
+    /** No network: records the destination and writes a tiny stand-in file. */
+    private class FakeLoraDownloader(private val size: Long) : LoraDownloader {
+        var downloadCalls: Int = 0
+            private set
+        var lastDest: Path? = null
+            private set
+
+        override fun contentLength(url: String): Long = size
+
+        override fun download(url: String, dest: Path): Long {
+            downloadCalls++
+            lastDest = dest
+            val bytes = "fake-lora".toByteArray()
+            Files.createDirectories(dest.parent)
+            Files.write(dest, bytes)
+            return bytes.size.toLong()
+        }
     }
 
     /** [statusAfter] is the terminal snapshot a blocking triggerRun() leaves behind. */

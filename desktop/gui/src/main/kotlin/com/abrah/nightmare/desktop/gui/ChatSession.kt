@@ -68,7 +68,7 @@ class ChatSession(
      * place without introducing a second construction path.
      */
     internal fun newAgent(model: ChatModel): Agent =
-        Agent(model, DesktopToolBox(tools, runControl), SYSTEM_PROMPT)
+        Agent(model, DesktopToolBox(tools, runControl, ::ask), SYSTEM_PROMPT)
 
     private var agent: Agent = newAgent(model)
 
@@ -247,8 +247,13 @@ class ChatSession(
         val SYSTEM_PROMPT: String = """
             你是桌面出图助手。用可用工具修改唯一的桌面工作流并运行，最后用一句话说明结果。
 
-            可用工具只有五个：new_workflow（新建空工作流）、add_node（添加节点）、
-            set_parameter（设置已有节点参数）、connect（连线）、run（运行工作流）。
+            可用工具共十二个：new_workflow（新建空工作流）、add_node（添加节点）、
+            set_parameter（设置已有节点参数）、connect（连线）、run（运行工作流）、
+            list_models（列出本地模型）、get_canvas（读当前工作流 JSON）、new_flow（同 new_workflow 的空工作流）、
+            save_flow（保存工作流）、list_loras（列出 LoRA）、download_lora（下载 LoRA）、delete_lora（删除 LoRA）。
+            有副作用的工具会先发确认型追问，必须等用户点选后才继续：
+            save_flow 覆盖已存在的文件要选「保存」才写入；download_lora 达到 512 MB 阈值要选「下载」才落盘；
+            delete_lora 一定要选「删除」才删除。用户选「取消」就是不做，别重复发起同一操作。
             合法节点类型只有四种：core.prompt（提示词）、core.image（图片输入）、sd.sample（采样器）、core.output（输出）。
             add_node 的 id 必须唯一，只能使用字母、数字、下划线 _ 或连字符 -，不支持其它字符或重复 id。
             所有工具参数与节点参数的值一律是字符串，数字也要写成字符串，例如 steps 传 "20"。

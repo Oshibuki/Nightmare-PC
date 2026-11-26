@@ -18,7 +18,7 @@ class DesktopToolCommandsTest {
     @Test
     fun `every tool spec carries an OpenAI-compatible description and parameters`() {
         val specs = DesktopToolCommands.specs()
-        assertEquals(10, specs.length())
+        assertEquals(12, specs.length())
         val functions = (0 until specs.length()).map { specs.getJSONObject(it) }
         assertTrue(functions.all { it.getString("type") == "function" })
         val byName = functions.associateBy { it.getJSONObject("function").getString("name") }
@@ -26,6 +26,7 @@ class DesktopToolCommandsTest {
             setOf(
                 "new_workflow", "add_node", "set_parameter", "connect", "run",
                 "list_models", "get_canvas", "new_flow", "save_flow", "list_loras",
+                "download_lora", "delete_lora",
             ),
             byName.keys,
         )
@@ -97,7 +98,7 @@ class DesktopToolCommandsTest {
             save.getJSONObject("parameters").getJSONArray("required").strings(),
         )
         assertEquals("string", save.getJSONObject("parameters").getJSONObject("properties").getJSONObject("path").getString("type"))
-        assertTrue("save_flow is save-only", save.getString("description").contains("不询问"))
+        assertTrue("save_flow must document the overwrite confirmation", save.getString("description").contains("确认"))
 
         val listModels = byName.getValue("list_models")
         assertEquals("string", listModels.getJSONObject("parameters").getJSONObject("properties").getJSONObject("dir").getString("type"))
@@ -129,7 +130,43 @@ class DesktopToolCommandsTest {
             ToolCommand.ListLoras("/tmp/models"),
             DesktopToolCommands.fromName("list_loras", JSONObject().put("dir", "/tmp/models")),
         )
-        assertEquals(null, DesktopToolCommands.fromName("delete_lora", JSONObject()))
+    }
+
+    @Test
+    fun `the two LoRA management tools document their arguments and map to commands`() {
+        val download = toolDescription("download_lora")
+        assertTrue("download_lora must name the URL: $download", download.contains("URL"))
+        assertTrue("download_lora must document the size confirmation: $download", download.contains("确认"))
+        val delete = toolDescription("delete_lora")
+        assertTrue("delete_lora must document the confirmation: $delete", delete.contains("确认"))
+        assertTrue("delete_lora must name the LoRA directory: $delete", delete.contains("LoRA"))
+
+        val specs = DesktopToolCommands.specs()
+        val byName = (0 until specs.length())
+            .map { specs.getJSONObject(it).getJSONObject("function") }
+            .associateBy { it.getString("name") }
+        val downloadParams = byName.getValue("download_lora").getJSONObject("parameters")
+        assertEquals(listOf("url"), downloadParams.getJSONArray("required").strings())
+        assertEquals("string", downloadParams.getJSONObject("properties").getJSONObject("url").getString("type"))
+        assertTrue("only url is required; dir stays optional", downloadParams.getJSONArray("required").length() == 1)
+        val deleteParams = byName.getValue("delete_lora").getJSONObject("parameters")
+        assertEquals(listOf("path"), deleteParams.getJSONArray("required").strings())
+        assertEquals("string", deleteParams.getJSONObject("properties").getJSONObject("path").getString("type"))
+
+        assertEquals(
+            ToolCommand.DownloadLora("https://example.invalid/a.safetensors", "/tmp/models"),
+            DesktopToolCommands.fromName(
+                "download_lora",
+                JSONObject().put("url", "https://example.invalid/a.safetensors").put("dir", "/tmp/models"),
+            ),
+        )
+        assertEquals(
+            ToolCommand.DeleteLora("/tmp/models/loras/a.safetensors"),
+            DesktopToolCommands.fromName(
+                "delete_lora",
+                JSONObject().put("path", "/tmp/models/loras/a.safetensors"),
+            ),
+        )
     }
 
     @Test

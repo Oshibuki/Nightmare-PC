@@ -18,6 +18,11 @@ import org.json.JSONObject
 class DesktopToolBox(
     private val tools: ToolInterface,
     private val runControl: WorkflowRunControl,
+    /**
+     * The confirmation-type 结构化追问 seam (ADR-0015). ChatSession injects
+     * [ChatSession.ask]; tools with a side effect consult it before acting.
+     */
+    private val ask: (String, List<String>) -> String = { _, _ -> AskGate.CANCEL },
 ) : ToolBox {
 
     override val specs: JSONArray = DesktopToolCommands.specs()
@@ -38,7 +43,7 @@ class DesktopToolBox(
         val command = DesktopToolCommands.fromName(name, args)
             ?: return AgentToolResult(JSONObject().put("error", "unknown tool: $name"))
 
-        return when (val result = tools.dispatch(command)) {
+        return when (val result = tools.dispatch(command, ask)) {
             is ToolResult.Ok -> AgentToolResult(
                 JSONObject().put("ok", result.summary),
                 pictures = if (command is ToolCommand.Run) {

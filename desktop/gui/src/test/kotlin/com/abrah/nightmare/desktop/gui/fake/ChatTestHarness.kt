@@ -98,7 +98,11 @@ fun awaitBubble(chat: ChatSession, predicate: (ChatItem) -> Boolean) {
         if (chat.snapshot().any(predicate)) latch.countDown()
     }
     try {
-        assertTrue("expected bubble did not arrive", latch.await(5, SECONDS))
+        // A fast turn can append the bubble before this listener is registered;
+        // check first, exactly as awaitStateOnce does, or the wait never ends.
+        if (!chat.snapshot().any(predicate)) {
+            assertTrue("expected bubble did not arrive", latch.await(5, SECONDS))
+        }
     } finally {
         unsubscribe()
     }
