@@ -1,10 +1,16 @@
 package com.abrah.nightmare.desktop.gui
 
+import com.abrah.nightmare.desktop.core.ModelFile.Contents
+import com.abrah.nightmare.desktop.core.ModelLibrary
 import com.abrah.nightmare.desktop.graph.ConnectionResult
 import com.abrah.nightmare.desktop.graph.DesktopNodeTypes
 import com.abrah.nightmare.desktop.graph.Position
 import com.abrah.nightmare.desktop.graph.WorkflowPersistence
 import com.abrah.nightmare.desktop.graph.isSafeNodeId
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.IOException
+import java.nio.file.Path
 
 /**
  * The narrow run capability an external tool needs from the GUI state (ADR-0008).
@@ -38,6 +44,21 @@ sealed interface ToolCommand {
     ) : ToolCommand
 
     data object Run : ToolCommand
+
+    /** Mobile's name for the same empty-workflow reset as [NewWorkflow]. */
+    data object NewFlow : ToolCommand
+
+    /** Read the shared 工作流 back, so a model can see what its edits produced. */
+    data object GetCanvas : ToolCommand
+
+    /** Explicit save-only write; no prompt/Ask is involved (ADR-0014). */
+    data class SaveFlow(val path: String) : ToolCommand
+
+    /** [dir] overrides $NIGHTMARE_MODELS / the shared cache for one call. */
+    data class ListModels(val dir: String? = null) : ToolCommand
+
+    /** Read-only LoRA enumeration; no search, download or delete (ADR-0014). */
+    data class ListLoras(val dir: String? = null) : ToolCommand
 }
 
 /** Observable outcome of one tool call; a rejected call leaves the workflow untouched. */
@@ -60,7 +81,7 @@ class ToolInterface(
     constructor(state: DefaultModeState) : this(state.sharedSession, state)
 
     fun dispatch(command: ToolCommand): ToolResult = when (command) {
-        is ToolCommand.NewWorkflow -> {
+        is ToolCommand.NewWorkflow, is ToolCommand.NewFlow -> {
             session.replaceWorkflow(WorkflowPersistence.newWorkflow())
             ToolResult.Ok("新建空工作流")
         }
@@ -126,5 +147,101 @@ class ToolInterface(
 
             else -> ToolResult.Rejected("无法触发运行（运行可能已在进行中）")
         }
+
+        is ToolCommand.GetCanvas -> ToolResult.Ok(session.workflow.toJson())
+
+        is ToolCommand.SaveFlow -> {
+            val feedback = session.saveTo(command.path)
+            if (feedback.ok) ToolResult.Ok(feedback.message) else ToolResult.Rejected(feedback.message)
+        }
+
+        is ToolCommand.ListModels -> modelInventory(command.dir)
+
+        is ToolCommand.ListLoras -> loraInventory(command.dir)
+    }
+
+    /**
+     * One library scan shared by `list_models` and `list_loras`: the CLI's
+     * resolve/scan rules, never a second model-discovery implementation.
+     * A missing root stays an explicit rejection rather than an empty list.
+     */
+    private fun scanLibrary(dir: String?): ModelLibrary.Scan =
+        ModelLibrary.scan(ModelLibrary.resolve(dir, System.getenv()))
+
+    private fun modelInventory(dir: String?): ToolResult {
+        val scan = try {
+            scanLibrary(dir)
+        } catch (e: IOException) {
+            return ToolResult.Rejected("无法读取模型库：${e.message}")
+        }
+        val models = JSONArray()
+        scan.found.forEach { found ->
+            models.put(
+                JSONObject()
+                    .put("path", found.path.toString())
+                    .put("bytes", found.bytes)
+                    .put(
+                        "format",
+                        when (found.contents) {
+                            is Contents.Safetensors -> "safetensors"
+                            is Contents.Gguf -> "gguf"
+                        },
+                    )
+                    .put("tensors", found.contents.tensors)
+                    .put("dtypes", JSONArray(found.contents.dtypes.toList().sorted())),
+            )
+        }
+        val rejected = JSONArray()
+        scan.rejected.forEach { rejected.put(JSONObject().put("path", it.path.toString()).put("reason", it.reason)) }
+        return ToolResult.Ok(
+            JSONObject()
+                .put("root", scan.root.toString())
+                .put("models", models)
+                .put("rejected", rejected)
+                .toString(),
+        )
+    }
+
+    private fun loraInventory(dir: String?): ToolResult {
+        val scan = try {
+            scanLibrary(dir)
+        } catch (e: IOException) {
+            return ToolResult.Rejected("无法读取模型库：${e.message}")
+        }
+        val loras = JSONArray()
+        scan.found.filter { isLoraFile(it.path, scan.root) }.forEach { found ->
+            loras.put(
+                JSONObject()
+                    .put("path", found.path.toString())
+                    .put("bytes", found.bytes)
+                    .put("tensors", found.contents.tensors),
+            )
+        }
+        val rejected = JSONArray()
+        scan.rejected.filter { isLoraFile(it.path, scan.root) }.forEach {
+            rejected.put(JSONObject().put("path", it.path.toString()).put("reason", it.reason))
+        }
+        return ToolResult.Ok(
+            JSONObject()
+                .put("root", scan.root.toString())
+                .put("loras", loras)
+                .put("rejected", rejected)
+                .toString(),
+        )
+    }
+
+    /**
+     * A LoRA here is a `.safetensors` below (but not at) the scan root, under a
+     * directory named with "lora". Excluding the root itself keeps a library
+     * folder such as `.../my-loras` from turning every checkpoint into a LoRA.
+     */
+    private fun isLoraFile(path: Path, root: Path): Boolean {
+        if (!path.fileName.toString().endsWith(".safetensors", ignoreCase = true)) return false
+        var parent = path.parent
+        while (parent != null && parent != root) {
+            if (parent.fileName?.toString()?.contains("lora", ignoreCase = true) == true) return true
+            parent = parent.parent
+        }
+        return false
     }
 }

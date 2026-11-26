@@ -18,12 +18,15 @@ class DesktopToolCommandsTest {
     @Test
     fun `every tool spec carries an OpenAI-compatible description and parameters`() {
         val specs = DesktopToolCommands.specs()
-        assertEquals(5, specs.length())
+        assertEquals(10, specs.length())
         val functions = (0 until specs.length()).map { specs.getJSONObject(it) }
         assertTrue(functions.all { it.getString("type") == "function" })
         val byName = functions.associateBy { it.getJSONObject("function").getString("name") }
         assertEquals(
-            setOf("new_workflow", "add_node", "set_parameter", "connect", "run"),
+            setOf(
+                "new_workflow", "add_node", "set_parameter", "connect", "run",
+                "list_models", "get_canvas", "new_flow", "save_flow", "list_loras",
+            ),
             byName.keys,
         )
 
@@ -78,6 +81,55 @@ class DesktopToolCommandsTest {
         val connectDescription = byName.getValue("connect").getJSONObject("function").getString("description")
         assertTrue("connect names the prompt port", connectDescription.contains("prompt"))
         assertTrue("connect names the image port", connectDescription.contains("image"))
+    }
+
+    @Test
+    fun `the five mapped tools describe their arguments to a real provider`() {
+        val specs = DesktopToolCommands.specs()
+        val byName = (0 until specs.length())
+            .map { specs.getJSONObject(it).getJSONObject("function") }
+            .associateBy { it.getString("name") }
+
+        val save = byName.getValue("save_flow")
+        assertTrue("save_flow must explain the path: ${save.getString("description")}", save.getString("description").contains("路径"))
+        assertEquals(
+            listOf("path"),
+            save.getJSONObject("parameters").getJSONArray("required").strings(),
+        )
+        assertEquals("string", save.getJSONObject("parameters").getJSONObject("properties").getJSONObject("path").getString("type"))
+        assertTrue("save_flow is save-only", save.getString("description").contains("不询问"))
+
+        val listModels = byName.getValue("list_models")
+        assertEquals("string", listModels.getJSONObject("parameters").getJSONObject("properties").getJSONObject("dir").getString("type"))
+        assertTrue("dir is optional", listModels.getJSONObject("parameters").getJSONArray("required").length() == 0)
+
+        val listLoras = byName.getValue("list_loras")
+        assertTrue(
+            "list_loras must say it only enumerates: ${listLoras.getString("description")}",
+            listLoras.getString("description").contains("不下载"),
+        )
+        assertTrue("get_canvas returns JSON", toolDescription("get_canvas").contains("JSON"))
+        assertTrue("new_flow resets the graph", toolDescription("new_flow").contains("清空"))
+    }
+
+    @Test
+    fun `the five mapped names resolve to dispatchable commands`() {
+        assertEquals(ToolCommand.GetCanvas, DesktopToolCommands.fromName("get_canvas", JSONObject()))
+        assertEquals(ToolCommand.NewFlow, DesktopToolCommands.fromName("new_flow", JSONObject()))
+        assertEquals(ToolCommand.NewWorkflow, DesktopToolCommands.fromName("new_workflow", JSONObject()))
+        assertEquals(
+            ToolCommand.SaveFlow("/tmp/desktop-flow.json"),
+            DesktopToolCommands.fromName("save_flow", JSONObject().put("path", "/tmp/desktop-flow.json")),
+        )
+        assertEquals(
+            ToolCommand.ListModels("/tmp/models"),
+            DesktopToolCommands.fromName("list_models", JSONObject().put("dir", "/tmp/models")),
+        )
+        assertEquals(
+            ToolCommand.ListLoras("/tmp/models"),
+            DesktopToolCommands.fromName("list_loras", JSONObject().put("dir", "/tmp/models")),
+        )
+        assertEquals(null, DesktopToolCommands.fromName("delete_lora", JSONObject()))
     }
 
     @Test
