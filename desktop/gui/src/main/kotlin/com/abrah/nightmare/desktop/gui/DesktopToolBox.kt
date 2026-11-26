@@ -22,6 +22,18 @@ class DesktopToolBox(
 
     override val specs: JSONArray = DesktopToolCommands.specs()
 
+    /**
+     * The copied core's default is just the tool name, so a rejected call only
+     * told the model — never the person — what went wrong. Show the compact
+     * arguments in the bubble instead; tool arguments carry no provider key
+     * (keys only ever live in the Authorization header, ADR-0012).
+     */
+    override fun summary(name: String, args: JSONObject): String {
+        val compact = args.toString()
+        val shown = if (compact.length <= MAX_SUMMARY_ARGS) compact else compact.take(MAX_SUMMARY_ARGS) + "…"
+        return "$name $shown"
+    }
+
     override fun call(name: String, args: JSONObject): AgentToolResult {
         val command = DesktopToolCommands.fromName(name, args)
             ?: return AgentToolResult(JSONObject().put("error", "unknown tool: $name"))
@@ -38,5 +50,10 @@ class DesktopToolBox(
 
             is ToolResult.Rejected -> AgentToolResult(JSONObject().put("error", result.reason))
         }
+    }
+
+    companion object {
+        /** Keep a long prompt from burying the rest of the chat. */
+        const val MAX_SUMMARY_ARGS = 120
     }
 }
