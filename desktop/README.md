@@ -62,6 +62,7 @@ What it checks, in order:
 | GUI compile | `:gui:classes` | `verify-gui-classes.log` | 900 s |
 | Full build | `build` (all JVM tests) | `verify-gui-build.log` | 900 s |
 | Fake CLI runner E2E | `:gui:test` with `WorkflowRunnerTest`, `ToolInterfaceTest`, `DefaultModeStateTest`, `AdvancedModeStateTest` | `verify-gui-fake-runner.log` | 600 s |
+| Chat turn (fake ChatModel + fake CLI) | `:gui:test` with `FakeChatModelWorkflowTest`, `ChatSessionTest`, `AskSessionTest`, `TurnLifecycleTest` | `verify-gui-chat-turn.log` | 600 s |
 | Workflow persistence | `:core:test` with `WorkflowPersistenceTest` | `verify-gui-persistence.log` | 600 s |
 | Real SD1.5 smoke | `:cli:test` with `Img2ImgRealE2ETest` | `verify-gui-real-smoke.log` | 1800 s |
 | GUI launch (opt-in) | `:gui:run` | `verify-gui-launch.log` | 60 s |
@@ -74,6 +75,7 @@ test, and any failed test gives a non-zero exit. Logs live in
 | --- | --- |
 | `VERIFY_GUI_GRADLE` | Gradle launcher, default `./gradlew` |
 | `VERIFY_GUI_LOG_DIR` | log directory, default `/tmp` |
+| `VERIFY_GUI_CHAT_TURN_TIMEOUT` | chat-turn seconds, default 600 |
 | `VERIFY_GUI_SMOKE_TIMEOUT` | real-smoke seconds, default 1800 |
 | `NIGHTMARE_MODELS` | model cache root, default `~/.cache/nightmare-desktop/models` |
 | `NIGHTMARE_SD_BIN` | engine binary, default `~/.cache/nightmare-desktop/engine/sd-cli` |
@@ -84,6 +86,11 @@ writes `已跳过（无权重缓存）` to the smoke log and exits 0; a missing 
 `已跳过（无引擎二进制）`. Neither blocks acceptance — the fake runner carries the
 contract without external downloads. With both present the CLI test really runs
 the cached weights and reports its timings.
+
+A real LLM provider smoke is a separate, optional manual check: it needs
+`NIGHTMARE_LLM_*` credentials and network. Without either it is skipped and
+never blocks acceptance — the `chat-turn` step above asserts the full path with
+a scripted fake ChatModel and a fake CLI, so it needs no key or network.
 
 Graphics are opt-in: `VERIFY_GUI_LAUNCH=1` adds the `:gui:run` step. It uses an
 existing `DISPLAY` as-is, wraps with `xvfb-run -a` on a headless machine that
