@@ -336,6 +336,7 @@ assert_eq "vulkan-default run exits 0" 0 "$rc"
 assert_contains "real smoke runs under the Vulkan default" "$STUB_CALLS" "Img2ImgRealE2ETest"
 assert_contains "Vulkan choice is logged" "$CASE_LOGS/verify-gui-real-smoke.log" "默认走 Vulkan 加速"
 assert_contains "VRAM override is logged" "$CASE_LOGS/verify-gui-real-smoke.log" "--max-vram 0"
+assert_contains "CPU offload is logged" "$CASE_LOGS/verify-gui-real-smoke.log" "--offload-to-cpu"
 WRAPPER="$CASE_LOGS/sd-cli-vulkan-wrapper.sh"
 if [ -x "$WRAPPER" ]; then
   ok "Vulkan wrapper exists and is executable"
@@ -343,6 +344,7 @@ else
   not_ok "Vulkan wrapper missing or not executable: $WRAPPER"
 fi
 assert_contains "wrapper injects --max-vram 0" "$WRAPPER" "--max-vram 0"
+assert_contains "wrapper injects --offload-to-cpu" "$WRAPPER" "--offload-to-cpu"
 assert_contains "wrapper targets the injected Vulkan binary" "$WRAPPER" "$FAKE_VULKAN"
 assert_contains "cli test receives the wrapper path" "$STUB_SMOKE_ENGINE" "$WRAPPER"
 assert_contains "vulkan-default run passes" "$CASE_OUT" "verify-gui: PASS"

@@ -95,12 +95,14 @@ When weights are present, the engine is selected in this order:
 2. Otherwise, when `VERIFY_GUI_VULKAN_BIN` (default
    `~/.cache/nightmare-desktop/engine/sd-cli-vulkan`) is executable, the script
    writes `$VERIFY_GUI_LOG_DIR/sd-cli-vulkan-wrapper.sh` containing
-   `exec <vulkan-bin> --max-vram 0 "$@"`, makes it executable and exports it as
-   `NIGHTMARE_SD_BIN` for `:cli:test`. Vulkan is the default because SD1.5 needs
-   ~566 MB while the engine's default Vulkan budget is only ~530 MB; without
-   `--max-vram 0` weight preparation fails with `model manager cannot make
-   enough memory available on Vulkan0`. The smoke log states which engine was
-   selected.
+   `exec <vulkan-bin> --max-vram 0 --offload-to-cpu "$@"`, makes it executable
+   and exports it as `NIGHTMARE_SD_BIN` for `:cli:test`. Vulkan is the default
+   because SD1.5 needs ~566 MB while the engine's default Vulkan budget is only
+   ~530 MB; without `--max-vram 0` weight preparation fails with `model manager
+   cannot make enough memory available on Vulkan0`. `--offload-to-cpu` keeps
+   weights in RAM when another Vulkan client (e.g. a local LLM server on the
+   same APU) has taken most of the shared device memory; compute still runs on
+   Vulkan. The smoke log states which engine was selected.
 3. If the Vulkan binary is missing or the wrapper cannot be created, the script
    logs the reason and falls back to the CPU engine
    `~/.cache/nightmare-desktop/engine/sd-cli`. A missing CPU engine then gives
