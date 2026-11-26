@@ -2,6 +2,10 @@ package com.abrah.nightmare.desktop.gui
 
 import com.abrah.nightmare.agent.ChatItem
 import com.abrah.nightmare.agent.ChatModel
+import com.abrah.nightmare.desktop.gui.fake.awaitBubble
+import com.abrah.nightmare.desktop.gui.fake.awaitStateOnce
+import com.abrah.nightmare.desktop.gui.fake.assumePosix
+import com.abrah.nightmare.desktop.gui.fake.fakeCliPng
 import com.abrah.nightmare.desktop.gui.fake.toolCall
 import com.abrah.nightmare.desktop.gui.fake.words
 import org.json.JSONArray
@@ -10,10 +14,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Assume
 import org.junit.Test
-import java.io.File
-import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit.SECONDS
 
@@ -27,7 +28,7 @@ class AskSessionTest {
     @Test(timeout = 15_000)
     fun `tapping an option releases the wait and the same turn renders a picture`() {
         assumePosix()
-        val (config, png) = fakeCliPng()
+        val (config, png) = fakeCliPng("ask-session-test", "ask-result.png")
         lateinit var chat: ChatSession
         val selected = mutableListOf<String>()
         var modelCalls = 0
@@ -62,7 +63,7 @@ class AskSessionTest {
         assertTrue(chat.answer(ask.id, "固定 seed"))
 
         awaitBubble(chat) { it is ChatItem.Picture }
-        awaitState(chat) { !chat.running && !chat.awaitingAsk }
+        awaitStateOnce(chat) { !chat.running && !chat.awaitingAsk }
         assertEquals(listOf("固定 seed"), selected)
         assertEquals(3, modelCalls)
         val bubbles = chat.snapshot()
@@ -106,7 +107,7 @@ class AskSessionTest {
 
         assertTrue("typing during an Ask must start a new turn", chat.send("第二句"))
         awaitBubble(chat) { it is ChatItem.Assistant && it.text == "second turn ok" }
-        awaitState(chat) { !chat.running && !chat.awaitingAsk }
+        awaitStateOnce(chat) { !chat.running && !chat.awaitingAsk }
 
         assertEquals(listOf(AskGate.CANCEL), seenAnswers)
         val bubbles = chat.snapshot()
@@ -126,7 +127,7 @@ class AskSessionTest {
             ).apply { isDaemon = true }
         }
         waiters.forEach { it.start() }
-        awaitState(chat) { chat.snapshot().count { item -> item is ChatItem.Ask } == 2 && chat.awaitingAsk }
+        awaitStateOnce(chat) { chat.snapshot().count { item -> item is ChatItem.Ask } == 2 && chat.awaitingAsk }
 
         assertEquals(2, chat.cancelPendingAsks())
         waiters.forEach { thread ->
@@ -157,7 +158,7 @@ class AskSessionTest {
         val chat = ChatSession(postToUi = { it.run() }, askTimeoutMillis = 5_000L)
         val waiter = Thread({ chat.ask(question, options) }, "test-ask-fields").apply { isDaemon = true }
         waiter.start()
-        awaitState(chat) { chat.snapshot().any { it is ChatItem.Ask } }
+        awaitStateOnce(chat) { chat.snapshot().any { it is ChatItem.Ask } }
         val raised = chat.snapshot().filterIsInstance<ChatItem.Ask>().single()
         assertTrue(chat.answer(raised.id, options[0]))
         waiter.join(4_000)
@@ -177,53 +178,7 @@ class AskSessionTest {
         }
     }
 
-    // ---- harness (same POSIX fake CLI shape as ChatSessionTest) ---------
-
-    private fun awaitState(chat: ChatSession, predicate: () -> Boolean) {
-        val latch = CountDownLatch(1)
-        val unsubscribe = chat.addChangeListener { if (predicate()) latch.countDown() }
-        try {
-            if (!predicate()) assertTrue("state never settled", latch.await(5, SECONDS))
-        } finally {
-            unsubscribe()
-        }
-    }
-
-    private fun awaitBubble(chat: ChatSession, predicate: (ChatItem) -> Boolean) {
-        val latch = CountDownLatch(1)
-        val unsubscribe = chat.addChangeListener {
-            if (chat.snapshot().any(predicate)) latch.countDown()
-        }
-        try {
-            assertTrue("expected bubble did not arrive", latch.await(5, SECONDS))
-        } finally {
-            unsubscribe()
-        }
-    }
-
-    private fun assumePosix() {
-        Assume.assumeFalse(
-            "fake CLI runner is a POSIX shell script",
-            System.getProperty("os.name").startsWith("Windows"),
-        )
-    }
-
-    private fun fakeCliPng(): Pair<RunConfig, File> {
-        val dir = Files.createTempDirectory("ask-session-test").toFile()
-        val png = File(dir, "ask-result.png")
-        val script = File(dir, "fake-cli.sh")
-        val quote = { s: String -> "'" + s.replace("'", "'\\''") + "'" }
-        script.writeText(
-            buildString {
-                append("#!/bin/sh\n")
-                append("echo ${quote("[1/1] seed=11 -> ${png.path}")}\n")
-                append(": > ${quote(png.path)}\n")
-                append("exit 0\n")
-            },
-        )
-        script.setExecutable(true)
-        return RunConfig(cliExecutable = script.path, outputPath = png.path, timeoutMillis = 10_000L) to png
-    }
+    // ---- harness: POSIX fake CLI + bounded waits come from ChatTestHarness --
 
     private fun json(vararg pairs: Pair<String, String>): String =
         JSONObject().apply { pairs.forEach { (key, value) -> put(key, value) } }.toString()

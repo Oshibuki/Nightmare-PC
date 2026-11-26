@@ -15,6 +15,7 @@ private const val UNCONFIGURED_MARKER = "尚未配置 provider"
 private const val UNREACHABLE_MARKER = "连不上 provider"
 
 /** Classified from the error sentence, so the state layer needs no UI types. */
+// Why markers: the copied core's LlmError is frozen as message-only and ChatItem.Error must keep its spec shape, so there is no typed error channel to carry a ProviderIssue.
 fun providerIssueOf(message: String): ProviderIssue = when {
     message.contains(UNCONFIGURED_MARKER) -> ProviderIssue.UNCONFIGURED
     message.contains(UNREACHABLE_MARKER) -> ProviderIssue.UNREACHABLE
@@ -58,15 +59,13 @@ class ProviderChatModel(
         val model = try {
             settings.autoModel()
         } catch (e: ProviderProbe.Unreachable) {
-            throw LlmError("$UNREACHABLE_MARKER：${redact(e.message.orEmpty(), config.key)}")
+            throw LlmError("$UNREACHABLE_MARKER：${redactSecret(e.message.orEmpty(), config.key)}")
         }
         return try {
             clientFactory(config.copy(model = model)).complete(messages, tools)
         } catch (e: LlmError) {
-            throw LlmError("$UNREACHABLE_MARKER：${redact(e.message.orEmpty(), config.key)}")
+            throw LlmError("$UNREACHABLE_MARKER：${redactSecret(e.message.orEmpty(), config.key)}")
         }
     }
 
-    private fun redact(text: String, key: String): String =
-        if (key.isBlank()) text else text.replace(key, "[redacted]")
 }

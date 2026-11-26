@@ -5,7 +5,12 @@ import com.abrah.nightmare.agent.ChatModel
 import com.abrah.nightmare.agent.LlmError
 import com.abrah.nightmare.desktop.graph.DesktopNodeTypes
 import com.abrah.nightmare.desktop.graph.Workflow
+import com.abrah.nightmare.desktop.gui.fake.BlockingCli
 import com.abrah.nightmare.desktop.gui.fake.ScriptChatModel
+import com.abrah.nightmare.desktop.gui.fake.awaitStatePolling
+import com.abrah.nightmare.desktop.gui.fake.assumePosix
+import com.abrah.nightmare.desktop.gui.fake.blockingCliPng
+import com.abrah.nightmare.desktop.gui.fake.fakeCliPng
 import com.abrah.nightmare.desktop.gui.fake.toolCall
 import com.abrah.nightmare.desktop.gui.fake.words
 import org.json.JSONArray
@@ -13,11 +18,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assume
 import org.junit.Test
-import java.io.File
-import java.io.FileOutputStream
-import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit.SECONDS
 
@@ -32,7 +33,7 @@ class TurnLifecycleTest {
     @Test(timeout = 20_000)
     fun `cancel waits for the in-flight tool then stops without a new LLM request`() {
         assumePosix()
-        val cli = blockingCliPng()
+        val cli = blockingCliPng("turn-lifecycle-test", "turn-result.png")
         val session = WorkflowSession(Workflow())
         val runner = WorkflowRunner(cli.config)
         var modelCalls = 0
@@ -51,7 +52,7 @@ class TurnLifecycleTest {
         val chat = ChatSession(session = session, runner = runner, model = model, postToUi = { it.run() })
 
         assertTrue(chat.send("build then cancel"))
-        awaitState(chat) { runner.isRunning() && runner.processHandle()?.isAlive == true }
+        awaitStatePolling(chat) { runner.isRunning() && runner.processHandle()?.isAlive == true }
         assertEquals(2, modelCalls)
 
         val child = runner.processHandle()!!
@@ -61,7 +62,7 @@ class TurnLifecycleTest {
         assertEquals("cancel sends no new LLM request", 2, modelCalls)
 
         cli.release()
-        awaitState(chat) { !chat.running }
+        awaitStatePolling(chat) { !chat.running }
         assertEquals("the next step sees the flag, not another model call", 2, modelCalls)
 
         val bubbles = chat.snapshot()
@@ -102,7 +103,7 @@ class TurnLifecycleTest {
 
         chat.closeWindow()
         assertEquals("window close cleans the CLI exactly once", 1, cleanups)
-        awaitState(chat) { !chat.running && !chat.awaitingAsk }
+        awaitStatePolling(chat) { !chat.running && !chat.awaitingAsk }
         assertEquals(listOf(AskGate.CANCEL), seen)
         val bubbles = chat.snapshot()
         assertEquals(AskGate.CANCEL, bubbles.filterIsInstance<ChatItem.Ask>().single().answer)
@@ -113,7 +114,7 @@ class TurnLifecycleTest {
     @Test(timeout = 20_000)
     fun `window close destroys the live CLI child through the existing runner path`() {
         assumePosix()
-        val cli = blockingCliPng()
+        val cli = blockingCliPng("turn-lifecycle-test", "turn-result.png")
         val runner = WorkflowRunner(cli.config)
         val chat = ChatSession(
             runner = runner,
@@ -122,12 +123,12 @@ class TurnLifecycleTest {
         )
 
         assertTrue(chat.send("run then close the window"))
-        awaitState(chat) { runner.isRunning() && runner.processHandle()?.isAlive == true }
+        awaitStatePolling(chat) { runner.isRunning() && runner.processHandle()?.isAlive == true }
         val child = runner.processHandle()!!
         chat.closeWindow()
 
-        awaitState(chat) { !child.isAlive }
-        awaitState(chat) { !chat.running }
+        awaitStatePolling(chat) { !child.isAlive }
+        awaitStatePolling(chat) { !chat.running }
         assertEquals("ADR-0009: the window-close path settles the run as CANCELLED", RunStatus.CANCELLED, runner.snapshot().status)
         assertTrue("the child is gone", runner.processHandle()?.isAlive != true)
         assertTrue(ChatItem.Assistant("已取消") in chat.snapshot())
@@ -169,14 +170,14 @@ class TurnLifecycleTest {
         assertEquals("the second model call never happened", 1, modelCalls)
 
         release.countDown()
-        awaitState(chat) { !chat.running }
+        awaitStatePolling(chat) { !chat.running }
         assertTrue("the first turn still finishes", ChatItem.Assistant("first turn ok") in chat.snapshot())
     }
 
     @Test(timeout = 20_000)
     fun `switching shells keeps the turn running and its picture in the same workflow`() {
         assumePosix()
-        val (config, png) = simpleCliPng()
+        val (config, png) = fakeCliPng("turn-lifecycle-fast", "fast-result.png")
         val session = WorkflowSession(Workflow())
         val runner = WorkflowRunner(config)
         lateinit var chat: ChatSession
@@ -205,7 +206,7 @@ class TurnLifecycleTest {
         )
 
         assertTrue(chat.send("切模式也要继续"))
-        awaitState(chat) { chat.awaitingAsk }
+        awaitStatePolling(chat) { chat.awaitingAsk }
         val ask = chat.snapshot().filterIsInstance<ChatItem.Ask>().single()
 
         // A mode switch disposes the ChatModeScreen composable, not the
@@ -216,8 +217,8 @@ class TurnLifecycleTest {
         assertTrue("the waiting Ask survives a shell switch", chat.awaitingAsk)
 
         assertTrue(chat.answer(ask.id, "继续"))
-        awaitState(chat) { ChatItem.Picture(png.path) in chat.snapshot() }
-        awaitState(chat) { !chat.running }
+        awaitStatePolling(chat) { ChatItem.Picture(png.path) in chat.snapshot() }
+        awaitStatePolling(chat) { !chat.running }
         // Switching back reattaches a listener to the same hoisted state.
         val reattached = chat.addChangeListener {}
         reattached()
@@ -247,12 +248,12 @@ class TurnLifecycleTest {
         val chat = ChatSession(model = model, postToUi = { it.run() })
 
         assertTrue(chat.send("第一次"))
-        awaitState(chat) { !chat.running }
+        awaitStatePolling(chat) { !chat.running }
         val error = chat.snapshot().filterIsInstance<ChatItem.Error>().single()
         assertTrue("provider is down" in error.text)
 
         assertTrue("a finished failed turn frees the send gate", chat.send("第二次重试"))
-        awaitState(chat) { !chat.running && ChatItem.Assistant("retry ok") in chat.snapshot() }
+        awaitStatePolling(chat) { !chat.running && ChatItem.Assistant("retry ok") in chat.snapshot() }
 
         val bubbles = chat.snapshot()
         assertEquals(listOf("第一次", "第二次重试"), bubbles.filterIsInstance<ChatItem.User>().map { it.text })
@@ -265,7 +266,7 @@ class TurnLifecycleTest {
     @Test(timeout = 20_000)
     fun `a cancelled turn can be retried and keeps the cancelled bubble and picture`() {
         assumePosix()
-        val cli = blockingCliPng()
+        val cli = blockingCliPng("turn-lifecycle-test", "turn-result.png")
         val model = ScriptChatModel(
             toolCall("a1", "run", "{}"),
             words("retry ok"),
@@ -274,86 +275,18 @@ class TurnLifecycleTest {
         val chat = ChatSession(runner = runner, model = model, postToUi = { it.run() })
 
         assertTrue(chat.send("第一次"))
-        awaitState(chat) { runner.isRunning() && runner.processHandle()?.isAlive == true }
+        awaitStatePolling(chat) { runner.isRunning() && runner.processHandle()?.isAlive == true }
         chat.cancelTurn()
         cli.release()
-        awaitState(chat) { !chat.running }
+        awaitStatePolling(chat) { !chat.running }
 
         assertTrue("retry starts a new turn", chat.send("重试"))
-        awaitState(chat) { !chat.running && ChatItem.Assistant("retry ok") in chat.snapshot() }
+        awaitStatePolling(chat) { !chat.running && ChatItem.Assistant("retry ok") in chat.snapshot() }
         val bubbles = chat.snapshot()
         assertEquals(listOf("第一次", "重试"), bubbles.filterIsInstance<ChatItem.User>().map { it.text })
         assertTrue("已取消 bubble survives retry", ChatItem.Assistant("已取消") in bubbles)
         assertTrue("the picture from the first turn survives retry", ChatItem.Picture(cli.png.path) in bubbles)
     }
 
-    // ---- harness ---------------------------------------------------------
-
-    /** Listener-driven with a bounded fallback poll: no Thread.sleep anywhere. */
-    private fun awaitState(chat: ChatSession, predicate: () -> Boolean) {
-        val deadline = System.nanoTime() + SECONDS.toNanos(10)
-        val latch = CountDownLatch(1)
-        val unsubscribe = chat.addChangeListener { if (predicate()) latch.countDown() }
-        try {
-            while (!predicate()) {
-                assertTrue("state never settled", System.nanoTime() < deadline)
-                latch.await(50, java.util.concurrent.TimeUnit.MILLISECONDS)
-            }
-        } finally {
-            unsubscribe()
-        }
-    }
-
-    private fun assumePosix() {
-        Assume.assumeFalse(
-            "the fake CLI is a POSIX shell script",
-            System.getProperty("os.name").startsWith("Windows"),
-        )
-    }
-
-    /** A fake CLI that blocks inside one tool call until the test releases it. */
-    private data class BlockingCli(val config: RunConfig, val png: File, val release: () -> Unit)
-
-    private fun simpleCliPng(): Pair<RunConfig, File> {
-        val dir = Files.createTempDirectory("turn-lifecycle-fast").toFile()
-        val png = File(dir, "fast-result.png")
-        val script = File(dir, "fast-cli.sh")
-        val quote = { s: String -> "'" + s.replace("'", "'\\''") + "'" }
-        script.writeText(
-            buildString {
-                append("#!/bin/sh\n")
-                append("echo ${quote("[1/1] seed=11 -> ${png.path}")}\n")
-                append(": > ${quote(png.path)}\n")
-                append("exit 0\n")
-            },
-        )
-        script.setExecutable(true)
-        return RunConfig(cliExecutable = script.path, outputPath = png.path, timeoutMillis = 10_000L) to png
-    }
-
-    private fun blockingCliPng(): BlockingCli {
-        val dir = Files.createTempDirectory("turn-lifecycle-test").toFile()
-        val png = File(dir, "turn-result.png")
-        val fifo = File(dir, "release.fifo")
-        val made = ProcessBuilder("mkfifo", fifo.path).start().waitFor(10, SECONDS)
-        Assume.assumeTrue("mkfifo is unavailable", made)
-        val script = File(dir, "blocking-cli.sh")
-        val quote = { s: String -> "'" + s.replace("'", "'\\''") + "'" }
-        script.writeText(
-            buildString {
-                append("#!/bin/sh\n")
-                append("cat ${quote(fifo.path)} > /dev/null\n")
-                append("echo ${quote("[1/1] seed=11 -> ${png.path}")}\n")
-                append(": > ${quote(png.path)}\n")
-                append("exit 0\n")
-            },
-        )
-        script.setExecutable(true)
-        val release = { FileOutputStream(fifo).use { it.write(0x78) } }
-        return BlockingCli(
-            RunConfig(cliExecutable = script.path, outputPath = png.path, timeoutMillis = 15_000L),
-            png,
-            release,
-        )
-    }
+    // ---- harness: POSIX fake CLI + bounded waits come from ChatTestHarness --
 }

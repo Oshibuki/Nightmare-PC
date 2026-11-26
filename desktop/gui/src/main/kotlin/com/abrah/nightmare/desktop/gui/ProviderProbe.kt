@@ -35,7 +35,7 @@ class ProviderProbe(
             )
         } catch (e: Unreachable) {
             // The transport's own message must not escape with a key in it.
-            throw Unreachable(redact(e.message.orEmpty(), config.key))
+            throw Unreachable(redactSecret(e.message.orEmpty(), config.key))
         }
         val data = runCatching { JSONObject(body).optJSONArray("data") }.getOrNull() ?: return emptyList()
         return (0 until data.length()).mapNotNull { data.optJSONObject(it) }
@@ -47,9 +47,6 @@ class ProviderProbe(
     companion object {
         const val CONNECT_TIMEOUT_MS = 3_000
         const val READ_TIMEOUT_MS = 8_000
-
-        private fun redact(text: String, key: String): String =
-            if (key.isBlank()) text else text.replace(key, "[redacted]")
 
         /** The only production transport: loopback tests inject their own. */
         object HttpTransport : Transport {
@@ -73,7 +70,7 @@ class ProviderProbe(
                     if (code >= 400) throw Unreachable("provider answered HTTP $code")
                     return text
                 } catch (e: IOException) {
-                    throw Unreachable(redact("could not reach provider: ${e.message}", key))
+                    throw Unreachable(redactSecret("could not reach provider: ${e.message}", key))
                 } finally {
                     connection.disconnect()
                 }
