@@ -96,6 +96,22 @@ class ToolInterfaceTest {
     }
 
     @Test
+    fun `a tool cannot raise steps above the cap and the rejection names the cap`() {
+        val session = WorkflowSession()
+        val tools = ToolInterface(session, DefaultModeState(session))
+        val before = session.workflow
+
+        val rejected = tools.dispatch(ToolCommand.SetParameter("sampler", "steps", "50"))
+        assertTrue(rejected is ToolResult.Rejected)
+        assertTrue("the tool must tell the model why: $rejected", (rejected as ToolResult.Rejected).reason.contains("20"))
+        assertEquals(before, session.workflow)
+
+        assertTrue(tools.dispatch(ToolCommand.SetParameter("sampler", "steps", "20")) is ToolResult.Ok)
+        assertTrue(tools.dispatch(ToolCommand.SetParameter("sampler", "steps", "12")) is ToolResult.Ok)
+        assertEquals("12", session.workflow.byId["sampler"]!!.params["steps"])
+    }
+
+    @Test
     fun `a fake tool chain assembles a txt2img workflow from nothing and runs it through the real CLI seam`() {
         assumePosix()
         val (config, png) = fakeCliPng()

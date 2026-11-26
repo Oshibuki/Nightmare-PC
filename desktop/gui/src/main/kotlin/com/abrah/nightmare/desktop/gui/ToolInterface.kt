@@ -80,10 +80,15 @@ class ToolInterface(
         }
 
         is ToolCommand.SetParameter -> {
-            if (session.setNodeParameter(command.nodeId, command.key, command.value)) {
-                ToolResult.Ok("已设置 ${command.nodeId}.${command.key}")
-            } else {
-                ToolResult.Rejected("节点或参数不存在：${command.nodeId}.${command.key}")
+            // A rejected steps edit must explain the cap instead of masquerading
+            // as a missing node/parameter, so the model can retry with a legal value.
+            val stepsRejection = if (command.key == "steps") stepsRejectionReason(command.value) else null
+            when {
+                stepsRejection != null -> ToolResult.Rejected(stepsRejection)
+                session.setNodeParameter(command.nodeId, command.key, command.value) ->
+                    ToolResult.Ok("已设置 ${command.nodeId}.${command.key}")
+
+                else -> ToolResult.Rejected("节点或参数不存在：${command.nodeId}.${command.key}")
             }
         }
 

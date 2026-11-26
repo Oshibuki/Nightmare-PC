@@ -74,6 +74,38 @@ class WorkflowRunnerTest {
     }
 
     @Test
+    fun `steps above the GUI cap reach the CLI and the result metadata as the capped value`() {
+        assumePosix()
+        val large = runFake(
+            imageNames = listOf("capped.png"),
+            workflow = workflowWith(samplerParams = mapOf("steps" to "50")),
+        )
+
+        assertEquals(RunStatus.SUCCESS, large.snapshot.status)
+        assertEquals("20", large.argvValue("--steps"))
+        assertEquals("20", large.snapshot.results.single().params["steps"])
+
+        val ordinary = runFake(
+            imageNames = listOf("ordinary.png"),
+            workflow = workflowWith(samplerParams = mapOf("steps" to "12")),
+        )
+        assertEquals("12", ordinary.argvValue("--steps"))
+        assertEquals("12", ordinary.snapshot.results.single().params["steps"])
+    }
+
+    @Test
+    fun `an unparseable steps value is passed to the CLI instead of being silently capped`() {
+        assumePosix()
+        val run = runFake(
+            imageNames = listOf("unchanged.png"),
+            workflow = workflowWith(samplerParams = mapOf("steps" to "many")),
+        )
+
+        assertEquals("many", run.argvValue("--steps"))
+        assertEquals("many", run.snapshot.results.single().params["steps"])
+    }
+
+    @Test
     fun `the workflow is projected into a stateless CLI command`() {
         assumePosix()
         val run = runFake(

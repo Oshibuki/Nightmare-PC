@@ -56,6 +56,7 @@ class WorkflowSession(initialWorkflow: Workflow = builtInTxt2imgWorkflow()) {
     fun setNodeParameter(nodeId: String, key: String, value: String): Boolean {
         val node = workflow.byId[nodeId] ?: return false
         if (!node.params.containsKey(key)) return false
+        if (key == "steps" && stepsRejectionReason(value) != null) return false
         replaceWorkflow(
             workflow.copy(
                 nodes = workflow.nodes.map { current ->

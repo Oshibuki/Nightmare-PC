@@ -76,6 +76,18 @@ class DesktopToolCommandsTest {
     }
 
     @Test
+    fun `set_parameter documents the steps cap for a real provider`() {
+        val description = toolDescription("set_parameter")
+
+        assertTrue("steps must be named: $description", description.contains("steps"))
+        assertTrue("the 20-step cap must be named: $description", description.contains("20"))
+        assertTrue(
+            "oversized steps must be called out: $description",
+            description.contains("拒绝") || description.contains("钳制"),
+        )
+    }
+
+    @Test
     fun `add_node accepts type aliases and both node_type spellings`() {
         val aliases = listOf(
             "prompt" to DesktopNodeTypes.PROMPT,
@@ -120,6 +132,14 @@ class DesktopToolCommandsTest {
             mapOf("steps" to "20", "cfgScale" to "7.0", "save" to "true", "prompt" to "a fox"),
             command.params,
         )
+    }
+
+    private fun toolDescription(name: String): String {
+        val specs = DesktopToolCommands.specs()
+        return (0 until specs.length())
+            .map { specs.getJSONObject(it).getJSONObject("function") }
+            .first { it.getString("name") == name }
+            .getString("description")
     }
 
     private fun JSONArray.strings(): List<String> = (0 until length()).map { getString(it) }
