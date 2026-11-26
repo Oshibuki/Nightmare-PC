@@ -13,6 +13,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 const val MAX_RUN_STEPS = 20
 
 /**
+ * Mirrors the CLI's img2img default. A workflow's written strength is passed
+ * through untouched: the CLI owns the 0..1 usage check (ADR-0013), so the GUI
+ * must not silently clamp it.
+ */
+private const val DEFAULT_IMG2IMG_STRENGTH = "0.75"
+
+/**
  * Clamp only a parseable integer above [MAX_RUN_STEPS]. Values at or below the
  * cap — and anything unparseable — stay untouched: the CLI owns the error for
  * bad flags, and the GUI must not silently swallow them.
@@ -218,9 +225,19 @@ class WorkflowRunner(private val config: RunConfig = RunConfig()) {
         return true
     }
 
-    /** Workflow → CLI arguments. The CLI keeps no state between invocations. */
+    /**
+     * Workflow → CLI arguments. The CLI keeps no state between invocations.
+     * An image input node selects `img2img` (ADR-0013): the same single child
+     * process, with `--init-img`/`--strength` from that node and no `--batch`,
+     * which the img2img subcommand does not accept. Without such a node the
+     * txt2img projection is unchanged.
+     */
     private fun project(workflow: Workflow): List<String> {
-        val args = mutableListOf(config.cliExecutable, "txt2img")
+        val imageNode = workflow.nodes.firstOrNull { it.type == DesktopNodeTypes.IMAGE_INPUT }
+        val args = mutableListOf(
+            config.cliExecutable,
+            if (imageNode == null) "txt2img" else "img2img",
+        )
         config.modelPath?.takeIf { it.isNotBlank() }?.let { args += listOf("--model", it) }
         val promptNode = workflow.nodes.firstOrNull { it.type == DesktopNodeTypes.PROMPT }
         val samplerNode = workflow.nodes.firstOrNull { it.type == DesktopNodeTypes.SD_SAMPLER }
@@ -241,7 +258,15 @@ class WorkflowRunner(private val config: RunConfig = RunConfig()) {
             }
         }
         args += listOf("--out", config.outputPath)
-        args += listOf("--batch", config.batch.toString())
+        if (imageNode == null) {
+            args += listOf("--batch", config.batch.toString())
+        } else {
+            args += listOf("--init-img", imageNode.params["path"] ?: "")
+            args += listOf(
+                "--strength",
+                imageNode.params["strength"]?.takeIf { it.isNotBlank() } ?: DEFAULT_IMG2IMG_STRENGTH,
+            )
+        }
         return args
     }
 
