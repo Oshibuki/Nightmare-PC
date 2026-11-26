@@ -130,6 +130,8 @@ docs/DEVICES.md
 # in desktop/AGENTS.md. Build output is already covered by `build/`/`.gradle/`.
 /desktop/models/
 /desktop/out/
+# GUI generation results land here (RunConfig.outputPath), never in the repo root.
+/desktop/outputs/
 
 # ⚠ The icon SOURCE artwork. `tools/build_icon.py` generates every asset under
 # res/mipmap-* from it, and those are committed; shipping the source too invites

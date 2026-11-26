@@ -66,7 +66,9 @@ data class RunSnapshot(
 data class RunConfig(
     val cliExecutable: String = System.getenv("NIGHTMARE_GUI_CLI") ?: "nightmare-desktop",
     val modelPath: String? = System.getenv("NIGHTMARE_GUI_MODEL"),
-    val outputPath: String = "nightmare-output.png",
+    // Relative to the GUI process's working directory (desktop/). The CLI
+    // creates the parent directory, so generated PNGs never litter the repo root.
+    val outputPath: String = "outputs/nightmare-output.png",
     val batch: Int = 1,
     val timeoutMillis: Long = 600_000L,
     val env: Map<String, String> = emptyMap(),

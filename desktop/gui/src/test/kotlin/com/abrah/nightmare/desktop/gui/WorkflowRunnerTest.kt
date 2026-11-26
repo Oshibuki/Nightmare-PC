@@ -19,6 +19,11 @@ import java.util.concurrent.TimeUnit
 class WorkflowRunnerTest {
 
     @Test
+    fun `the default output path stays under the outputs directory`() {
+        assertEquals("outputs/nightmare-output.png", RunConfig().outputPath)
+    }
+
+    @Test
     fun `a successful run emits exactly one progress event per produced image`() {
         assumePosix()
         val run = runFake(imageNames = listOf("image-1.png", "image-2.png"))
