@@ -33,6 +33,38 @@ class WorkflowPersistenceTest {
     }
 
     @Test
+    fun `an image input node with string params survives a format one save load cycle`() {
+        val file = tmp.newFolder("image-node").toPath().resolve("img2img.json")
+        val image = DesktopNodeTypes.imageInput.createNode(
+            "init",
+            params = mapOf("path" to "/tmp/source.png", "strength" to "0.4"),
+        )
+        val base = chainedWorkflow()
+        val workflow = (base.copy(nodes = base.nodes + image)
+            .connect("init", "sampler", "initImage") as ConnectionResult.Connected).workflow
+
+        val saved = WorkflowPersistence.save(workflow, file)
+        assertTrue(saved is WorkflowResult.Ok)
+
+        val json = JSONObject(Files.readString(file))
+        assertEquals(1, json.getInt("format"))
+        val savedImage = (0 until json.getJSONArray("nodes").length())
+            .map { json.getJSONArray("nodes").getJSONObject(it) }
+            .first { it.getString("id") == "init" }
+        assertEquals("core.image", savedImage.getString("type"))
+        assertEquals("/tmp/source.png", savedImage.getJSONObject("params").getString("path"))
+        assertEquals("0.4", savedImage.getJSONObject("params").getString("strength"))
+        val savedSampler = (0 until json.getJSONArray("nodes").length())
+            .map { json.getJSONArray("nodes").getJSONObject(it) }
+            .first { it.getString("id") == "sampler" }
+        assertEquals("init:image", savedSampler.getJSONObject("inputs").getString("initImage"))
+
+        val loaded = WorkflowPersistence.load(file)
+        assertTrue(loaded is WorkflowResult.Ok)
+        assertEquals(workflow, (loaded as WorkflowResult.Ok).value)
+    }
+
+    @Test
     fun `new workflow is empty and survives a save load cycle`() {
         val file = tmp.newFolder("fresh").toPath().resolve("empty.json")
         val fresh = WorkflowPersistence.newWorkflow()

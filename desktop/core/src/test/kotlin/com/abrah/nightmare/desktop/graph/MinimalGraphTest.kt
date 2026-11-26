@@ -9,9 +9,9 @@ import org.junit.Test
 class MinimalGraphTest {
 
     @Test
-    fun `built-in node types create the three txt2img nodes from presentation metadata`() {
+    fun `built-in node types keep the three txt2img nodes and add an image input`() {
         assertEquals(
-            setOf("core.prompt", "sd.sample", "core.output"),
+            setOf("core.prompt", "sd.sample", "core.output", "core.image"),
             DesktopNodeTypes.registry.keys,
         )
 
@@ -49,6 +49,33 @@ class MinimalGraphTest {
                 Connection(Source("sampler", "image"), "output", "image"),
             ),
             (second as ConnectionResult.Connected).workflow.connections,
+        )
+    }
+
+    @Test
+    fun `an image input node carries its path and strength and wires into the sampler`() {
+        val defaults = DesktopNodeTypes.imageInput.createNode("init")
+        assertEquals("core.image", defaults.type)
+        assertEquals("", defaults.params["path"])
+        assertEquals("0.75", defaults.params["strength"])
+
+        val configured = DesktopNodeTypes.imageInput.createNode(
+            "init",
+            params = mapOf("path" to "/tmp/source.png", "strength" to "0.4"),
+        )
+        val prompt = DesktopNodeTypes.prompt.createNode("prompt")
+        val sampler = DesktopNodeTypes.sdSampler.createNode("sampler")
+        val first = Workflow(listOf(prompt, configured, sampler))
+            .connect("prompt", "sampler", "prompt") as ConnectionResult.Connected
+        val second = first.workflow.connect("init", "sampler", "initImage")
+
+        assertTrue(second is ConnectionResult.Connected)
+        assertEquals(
+            setOf(
+                Connection(Source("prompt", "prompt"), "sampler", "prompt"),
+                Connection(Source("init", "image"), "sampler", "initImage"),
+            ),
+            (second as ConnectionResult.Connected).workflow.connections.toSet(),
         )
     }
 
