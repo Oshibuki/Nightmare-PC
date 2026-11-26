@@ -49,7 +49,12 @@ class DesktopToolCommandsTest {
         val addProps = addParams.getJSONObject("properties")
         assertEquals("string", addProps.getJSONObject("type").getString("type"))
         assertEquals(
-            listOf("core.prompt", "sd.sample", "core.output"),
+            listOf(
+                DesktopNodeTypes.PROMPT,
+                DesktopNodeTypes.IMAGE_INPUT,
+                DesktopNodeTypes.SD_SAMPLER,
+                DesktopNodeTypes.OUTPUT,
+            ),
             addProps.getJSONObject("type").getJSONArray("enum").strings(),
         )
         assertTrue(
@@ -91,11 +96,16 @@ class DesktopToolCommandsTest {
     fun `add_node accepts type aliases and both node_type spellings`() {
         val aliases = listOf(
             "prompt" to DesktopNodeTypes.PROMPT,
+            "image" to DesktopNodeTypes.IMAGE_INPUT,
+            "img" to DesktopNodeTypes.IMAGE_INPUT,
+            "init_image" to DesktopNodeTypes.IMAGE_INPUT,
+            "initImage" to DesktopNodeTypes.IMAGE_INPUT,
             "sampler" to DesktopNodeTypes.SD_SAMPLER,
             "sd_sampler" to DesktopNodeTypes.SD_SAMPLER,
             "sample" to DesktopNodeTypes.SD_SAMPLER,
             "output" to DesktopNodeTypes.OUTPUT,
             DesktopNodeTypes.PROMPT to DesktopNodeTypes.PROMPT,
+            DesktopNodeTypes.IMAGE_INPUT to DesktopNodeTypes.IMAGE_INPUT,
         )
         aliases.forEach { (given, expected) ->
             val command = DesktopToolCommands.fromName(
