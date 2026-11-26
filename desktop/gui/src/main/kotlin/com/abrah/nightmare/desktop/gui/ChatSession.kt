@@ -3,23 +3,10 @@ package com.abrah.nightmare.desktop.gui
 import com.abrah.nightmare.agent.Agent
 import com.abrah.nightmare.agent.ChatItem
 import com.abrah.nightmare.agent.ChatModel
-import com.abrah.nightmare.agent.LlmError
 import com.abrah.nightmare.desktop.graph.Workflow
-import org.json.JSONArray
-import org.json.JSONObject
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.SwingUtilities
-
-/**
- * The production model seam for this slice: there is no provider wiring yet
- * (ticket 10 owns that), so a turn fails loudly into an error bubble instead of
- * opening a network connection. `Agent.send` catches exactly this [LlmError].
- */
-object UnconfiguredChatModel : ChatModel {
-    override fun complete(messages: JSONArray, tools: JSONArray): JSONObject =
-        throw LlmError("尚未配置 provider，无法发起对话回合。provider 设置将在后续工单接入；本次没有发起任何网络请求。")
-}
 
 /**
  * One 对话回合 session over the SAME [WorkflowSession] and [WorkflowRunner] the
@@ -35,7 +22,9 @@ object UnconfiguredChatModel : ChatModel {
 class ChatSession(
     private val session: WorkflowSession = WorkflowSession(),
     private val runner: WorkflowRunner = WorkflowRunner(),
-    model: ChatModel = UnconfiguredChatModel,
+    // Production now goes through the copied :core LlmClient with env+memory settings.
+    // Tests keep injecting their own ChatModel at this same seam.
+    model: ChatModel = ProviderChatModel(ChatProviderStore.settings),
     private val postToUi: (Runnable) -> Unit = { SwingUtilities.invokeLater(it) },
     private val startTurn: (Runnable) -> Unit = { runnable ->
         Thread(runnable, "gui-chat-turn").apply { isDaemon = true }.start()

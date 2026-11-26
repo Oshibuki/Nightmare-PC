@@ -59,6 +59,13 @@ fun ChatModeScreen(
     val runState = remember(state, revision) { state.runSnapshot() }
     var draft by remember { mutableStateOf("") }
     var openNodeId by remember { mutableStateOf<String?>(null) }
+    var settingsOpen by remember { mutableStateOf(false) }
+    // The same process-wide settings object the production ChatModel reads.
+    val settings = ChatProviderStore.settings
+    DisposableEffect(settings) {
+        val unsubscribe = settings.addChangeListener { revision++ }
+        onDispose { unsubscribe() }
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFFF5F7FB))) {
         ChatBreadcrumb(
@@ -66,6 +73,8 @@ fun ChatModeScreen(
             onOpenNode = { openNodeId = it },
             onSwitchToDefault = onSwitchToDefault,
             onSwitchToAdvanced = onSwitchToAdvanced,
+            configured = settings.statusLabel(),
+            onOpenSettings = { settingsOpen = true },
         )
 
         Row(modifier = Modifier.fillMaxSize().weight(1f)) {
@@ -75,7 +84,9 @@ fun ChatModeScreen(
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 20.dp, vertical = 12.dp),
                 ) {
-                    items.forEach { bubble -> ChatBubble(bubble) }
+                    items.forEach { bubble ->
+                        ChatBubble(bubble, onOpenSettings = { settingsOpen = true })
+                    }
                 }
                 ChatComposer(
                     draft = draft,
@@ -109,6 +120,9 @@ fun ChatModeScreen(
             onClose = { openNodeId = null },
         )
     }
+    if (settingsOpen) {
+        ProviderSettingsDialog(settings, onClose = { settingsOpen = false })
+    }
 }
 
 @Composable
@@ -117,6 +131,8 @@ private fun ChatBreadcrumb(
     onOpenNode: (String) -> Unit,
     onSwitchToDefault: () -> Unit,
     onSwitchToAdvanced: () -> Unit,
+    configured: String,
+    onOpenSettings: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().height(72.dp).background(Color.White).padding(horizontal = 16.dp),
@@ -127,6 +143,19 @@ private fun ChatBreadcrumb(
         Button(onClick = onSwitchToAdvanced) { Text("高级模式") }
         Spacer(modifier = Modifier.width(12.dp))
         Text("对话 ·", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Spacer(modifier = Modifier.width(10.dp))
+        // Gear entry: only the masked status is ever shown, never the key.
+        Button(
+            onClick = onOpenSettings,
+            shape = RoundedCornerShape(18.dp),
+            colors = ButtonDefaults.buttonColors(
+                backgroundColor = Color(0xFFF8FAFD),
+                contentColor = Color(0xFF243049),
+            ),
+        ) {
+            Text("设置（$configured）", fontSize = 12.sp)
+        }
+        Spacer(modifier = Modifier.width(10.dp))
         nodes.forEachIndexed { index, node ->
             if (index > 0) {
                 Text("→", color = Color(0xFF94A0B5), modifier = Modifier.padding(horizontal = 6.dp))
@@ -147,7 +176,7 @@ private fun ChatBreadcrumb(
 }
 
 @Composable
-private fun ChatBubble(item: ChatItem) {
+private fun ChatBubble(item: ChatItem, onOpenSettings: () -> Unit = {}) {
     val mine = item is ChatItem.User
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
@@ -194,8 +223,16 @@ private fun ChatBubble(item: ChatItem) {
                 }
 
                 is ChatItem.Error -> {
+                    val issue = providerIssueOf(item.text)
                     Text("错误", color = Color(0xFFB23B3B), fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                    Text(item.text, color = Color(0xFF9B2C2C))
+                    // Two provider classes get fixed, key-free text and a settings exit.
+                    // No retry is triggered here and the workflow is untouched.
+                    Text(
+                        if (issue == ProviderIssue.OTHER) item.text else providerIssueText(item.text),
+                        color = Color(0xFF9B2C2C),
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Button(onClick = onOpenSettings) { Text("打开设置", fontSize = 12.sp) }
                 }
 
                 is ChatItem.Ask -> {
