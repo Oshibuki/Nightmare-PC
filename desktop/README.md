@@ -60,8 +60,10 @@ What it checks, in order:
 | Step | Command | Log in `/tmp` | Timeout |
 | --- | --- | --- | --- |
 | GUI compile | `:gui:classes` | `verify-gui-classes.log` | 900 s |
+| Launch config | `preflight-gui-launch.sh` (no Gradle) | `verify-gui-launch-config.log` | 30 s |
 | Full build | `build` (all JVM tests) | `verify-gui-build.log` | 900 s |
 | Fake CLI runner E2E | `:gui:test` with `WorkflowRunnerTest`, `ToolInterfaceTest`, `DefaultModeStateTest`, `AdvancedModeStateTest` | `verify-gui-fake-runner.log` | 600 s |
+| Chat turn (fake ChatModel + fake CLI) | `:gui:test` with `FakeChatModelWorkflowTest`, `ChatSessionTest`, `AskSessionTest`, `TurnLifecycleTest` | `verify-gui-chat-turn.log` | 600 s |
 | Workflow persistence | `:core:test` with `WorkflowPersistenceTest` | `verify-gui-persistence.log` | 600 s |
 | Real SD1.5 smoke | `:cli:test` with `Img2ImgRealE2ETest` | `verify-gui-real-smoke.log` | 1800 s |
 | GUI launch (opt-in) | `:gui:run` | `verify-gui-launch.log` | 60 s |
@@ -74,9 +76,22 @@ test, and any failed test gives a non-zero exit. Logs live in
 | --- | --- |
 | `VERIFY_GUI_GRADLE` | Gradle launcher, default `./gradlew` |
 | `VERIFY_GUI_LOG_DIR` | log directory, default `/tmp` |
+| `VERIFY_GUI_PREFLIGHT` | preflight launcher, default `./preflight-gui-launch.sh`; test seam only |
+| `VERIFY_GUI_NO_CACHE` | set to `1` to append `--no-build-cache --rerun-tasks` to every Gradle call; default `0` leaves them unchanged |
+| `VERIFY_GUI_CHAT_TURN_TIMEOUT` | chat-turn seconds, default 600 |
 | `VERIFY_GUI_SMOKE_TIMEOUT` | real-smoke seconds, default 1800 |
 | `NIGHTMARE_MODELS` | model cache root, default `~/.cache/nightmare-desktop/models` |
-| `NIGHTMARE_SD_BIN` | engine binary, default `~/.cache/nightmare-desktop/engine/sd-cli` |
+| `NIGHTMARE_SD_BIN` | explicit engine binary; when set it wins verbatim (no Vulkan wrapper). Otherwise real-smoke picks the engine as described below |
+| `VERIFY_GUI_VULKAN_BIN` | Vulkan engine used by the real-smoke wrapper, default `~/.cache/nightmare-desktop/engine/sd-cli-vulkan`; mainly a test seam |
+
+Right after the compile step, the `launch-config` step runs
+`preflight-gui-launch.sh`: it validates any manually set `NIGHTMARE_GUI_CLI`,
+`NIGHTMARE_SD_BIN` or `NIGHTMARE_GUI_MODEL` and fails fast with fix guidance,
+but prints `未设置手动启动配置，preflight 跳过` and exits 0 when none are set, so
+headless runs stay green (see [gui-launch-config.md](docs/gui-launch-config.md)).
+Set `VERIFY_GUI_NO_CACHE=1` to append `--no-build-cache --rerun-tasks` to every
+Gradle call and force real re-execution instead of a green cache hit; the
+default leaves every command line unchanged.
 
 The real smoke is optional. If
 `$NIGHTMARE_MODELS/sd15/v1-5-pruned-emaonly.safetensors` is absent the script
@@ -84,6 +99,35 @@ writes `已跳过（无权重缓存）` to the smoke log and exits 0; a missing 
 `已跳过（无引擎二进制）`. Neither blocks acceptance — the fake runner carries the
 contract without external downloads. With both present the CLI test really runs
 the cached weights and reports its timings.
+
+When weights are present, the engine is selected in this order:
+
+1. An explicitly set `NIGHTMARE_SD_BIN` is used verbatim — no wrapper and no
+   injected flags. This is the escape hatch for a custom or CPU-only engine.
+2. Otherwise, when `VERIFY_GUI_VULKAN_BIN` (default
+   `~/.cache/nightmare-desktop/engine/sd-cli-vulkan`) is executable, the script
+   writes `$VERIFY_GUI_LOG_DIR/sd-cli-vulkan-wrapper.sh` containing
+   `exec <vulkan-bin> --max-vram 0 --offload-to-cpu "$@"`, makes it executable
+   and exports it as `NIGHTMARE_SD_BIN` for `:cli:test`. Vulkan is the default
+   because SD1.5 needs ~566 MB while the engine's default Vulkan budget is only
+   ~530 MB; without `--max-vram 0` weight preparation fails with `model manager
+   cannot make enough memory available on Vulkan0`. `--offload-to-cpu` keeps
+   weights in RAM when another Vulkan client (e.g. a local LLM server on the
+   same APU) has taken most of the shared device memory; compute still runs on
+   Vulkan. The smoke log states which engine was selected.
+3. If the Vulkan binary is missing or the wrapper cannot be created, the script
+   logs the reason and falls back to the CPU engine
+   `~/.cache/nightmare-desktop/engine/sd-cli`. A missing CPU engine then gives
+   the usual `已跳过（无引擎二进制）` skip.
+
+`VERIFY_GUI_VULKAN_BIN` exists mainly so `verify-gui.test.sh` can inject a fake
+executable and assert the wrapper and all three selection branches without a
+GPU or real weights.
+
+A real LLM provider smoke is a separate, optional manual check: it needs
+`NIGHTMARE_LLM_*` credentials and network. Without either it is skipped and
+never blocks acceptance — the `chat-turn` step above asserts the full path with
+a scripted fake ChatModel and a fake CLI, so it needs no key or network.
 
 Graphics are opt-in: `VERIFY_GUI_LAUNCH=1` adds the `:gui:run` step. It uses an
 existing `DISPLAY` as-is, wraps with `xvfb-run -a` on a headless machine that

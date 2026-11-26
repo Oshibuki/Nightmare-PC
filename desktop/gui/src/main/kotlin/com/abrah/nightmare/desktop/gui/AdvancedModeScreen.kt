@@ -60,6 +60,7 @@ import com.abrah.nightmare.desktop.graph.DesktopNodeTypes
 fun AdvancedModeScreen(
     state: AdvancedModeState = remember { AdvancedModeState() },
     onSwitchToDefault: () -> Unit = {},
+    onSwitchToChat: () -> Unit = {},
 ) {
     var revision by remember { mutableIntStateOf(0) }
     DisposableEffect(state) {
@@ -80,6 +81,8 @@ fun AdvancedModeScreen(
             Text("高级模式 · 自由节点画布", color = Color.White, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.width(16.dp))
             Button(onClick = onSwitchToDefault) { Text("切到默认模式") }
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(onClick = onSwitchToChat) { Text("切到对话模式") }
             Spacer(modifier = Modifier.width(8.dp))
             Button(onClick = { state.zoomAt(zoomCenter, 1.2f) }) { Text("放大") }
             Spacer(modifier = Modifier.width(8.dp))

@@ -1,5 +1,7 @@
 package com.abrah.nightmare.desktop.graph
 
+import com.abrah.nightmare.desktop.core.SamplerWire
+
 /**
  * Desktop-only workflow presentation model (ADR-0007). Written from scratch in
  * `desktop/`; it is not a copy of the Android `NodeType`/`Graph` and must never
@@ -97,7 +99,7 @@ object DesktopNodeTypes {
         outputs = listOf(Port("image", "IMAGE")),
         widgets = listOf(
             Widget("sampler", "采样器", "choice", "euler"),
-            Widget("scheduler", "调度器", "choice", "normal"),
+            Widget("scheduler", "调度器", "choice", SamplerWire.DEFAULT_SCHEDULER),
             Widget("steps", "步数", "int", "20"),
             Widget("cfgScale", "CFG", "float", "7.0"),
             Widget("seed", "Seed", "int", "-1"),

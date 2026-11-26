@@ -19,6 +19,11 @@ import java.util.concurrent.TimeUnit
 class WorkflowRunnerTest {
 
     @Test
+    fun `the default output path stays under the outputs directory`() {
+        assertEquals("outputs/nightmare-output.png", RunConfig().outputPath)
+    }
+
+    @Test
     fun `a successful run emits exactly one progress event per produced image`() {
         assumePosix()
         val run = runFake(imageNames = listOf("image-1.png", "image-2.png"))
@@ -74,6 +79,38 @@ class WorkflowRunnerTest {
     }
 
     @Test
+    fun `steps above the GUI cap reach the CLI and the result metadata as the capped value`() {
+        assumePosix()
+        val large = runFake(
+            imageNames = listOf("capped.png"),
+            workflow = workflowWith(samplerParams = mapOf("steps" to "50")),
+        )
+
+        assertEquals(RunStatus.SUCCESS, large.snapshot.status)
+        assertEquals("20", large.argvValue("--steps"))
+        assertEquals("20", large.snapshot.results.single().params["steps"])
+
+        val ordinary = runFake(
+            imageNames = listOf("ordinary.png"),
+            workflow = workflowWith(samplerParams = mapOf("steps" to "12")),
+        )
+        assertEquals("12", ordinary.argvValue("--steps"))
+        assertEquals("12", ordinary.snapshot.results.single().params["steps"])
+    }
+
+    @Test
+    fun `an unparseable steps value is passed to the CLI instead of being silently capped`() {
+        assumePosix()
+        val run = runFake(
+            imageNames = listOf("unchanged.png"),
+            workflow = workflowWith(samplerParams = mapOf("steps" to "many")),
+        )
+
+        assertEquals("many", run.argvValue("--steps"))
+        assertEquals("many", run.snapshot.results.single().params["steps"])
+    }
+
+    @Test
     fun `the workflow is projected into a stateless CLI command`() {
         assumePosix()
         val run = runFake(
@@ -114,6 +151,46 @@ class WorkflowRunnerTest {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun `a legacy normal scheduler is projected as discrete without editing the workflow`() {
+        assumePosix()
+        val workflow = workflowWith(samplerParams = mapOf("scheduler" to "normal"))
+        val run = runFake(imageNames = listOf("image-1.png"), workflow = workflow)
+
+        assertEquals(RunStatus.SUCCESS, run.snapshot.status)
+        assertEquals("discrete", run.argvValue("--scheduler"))
+        assertEquals("normal", workflow.nodes.first { it.id == "sampler" }.params["scheduler"])
+    }
+
+    @Test
+    fun `display names become engine values while unknown values reach the CLI unchanged`() {
+        assumePosix()
+        val named = runFake(
+            imageNames = listOf("image-1.png"),
+            workflow = workflowWith(
+                samplerParams = mapOf("sampler" to "DPM++ 2M", "scheduler" to "Karras"),
+            ),
+        )
+        assertEquals(RunStatus.SUCCESS, named.snapshot.status)
+        assertEquals("dpm++2m", named.argvValue("--sampler"))
+        assertEquals("karras", named.argvValue("--scheduler"))
+
+        val upper = runFake(
+            imageNames = listOf("image-2.png"),
+            workflow = workflowWith(samplerParams = mapOf("scheduler" to "NORMAL")),
+        )
+        assertEquals("discrete", upper.argvValue("--scheduler"))
+
+        val unknown = runFake(
+            imageNames = listOf("image-3.png"),
+            workflow = workflowWith(
+                samplerParams = mapOf("sampler" to "Mystery", "scheduler" to "Turbo"),
+            ),
+        )
+        assertEquals("Mystery", unknown.argvValue("--sampler"))
+        assertEquals("Turbo", unknown.argvValue("--scheduler"))
     }
 
     @Test
@@ -342,6 +419,11 @@ class WorkflowRunnerTest {
         val dir: File,
         val outputs: List<File>,
     )
+
+    private fun FakeRun.argvValue(flag: String): String? {
+        val index = argv.indexOf(flag)
+        return if (index < 0) null else argv.getOrNull(index + 1)
+    }
 
     private fun assumePosix() {
         Assume.assumeFalse(

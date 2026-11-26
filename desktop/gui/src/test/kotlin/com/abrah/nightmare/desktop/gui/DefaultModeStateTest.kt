@@ -36,7 +36,7 @@ class DefaultModeStateTest {
             fields.map { it.key },
         )
         assertEquals("euler", fields.single { it.key == "sampler" }.value)
-        assertEquals("normal", fields.single { it.key == "scheduler" }.value)
+        assertEquals("discrete", fields.single { it.key == "scheduler" }.value)
         assertEquals("20", fields.single { it.key == "steps" }.value)
         assertTrue(fields.single { it.key == "sampler" }.options.contains("dpmpp_2m"))
         assertTrue(fields.single { it.key == "scheduler" }.options.contains("karras"))
@@ -56,6 +56,26 @@ class DefaultModeStateTest {
         assertEquals("42", fields.single { it.key == "seed" }.value)
         assertEquals("12", session.workflow.byId["sampler"]!!.params["steps"])
         assertEquals("42", session.workflow.byId["sampler"]!!.params["seed"])
+    }
+
+    @Test
+    fun `steps edits above the cap and non numeric steps are rejected without changing the workflow`() {
+        val session = WorkflowSession()
+        val state = DefaultModeState(session)
+        assertTrue(state.selectNode("sampler"))
+        val before = session.workflow
+
+        assertFalse("the drawer must reject 50 steps", state.setSelectedParameter("steps", "50"))
+        assertEquals(before, session.workflow)
+        assertFalse("the shared session must reject 50 steps too", session.setNodeParameter("sampler", "steps", "50"))
+        assertEquals(before, session.workflow)
+        assertFalse(state.setSelectedParameter("steps", "many"))
+        assertEquals(before, session.workflow)
+
+        assertTrue(state.setSelectedParameter("steps", "20"))
+        assertEquals("20", session.workflow.byId["sampler"]!!.params["steps"])
+        assertTrue(state.setSelectedParameter("steps", "12"))
+        assertEquals("12", session.workflow.byId["sampler"]!!.params["steps"])
     }
 
     @Test

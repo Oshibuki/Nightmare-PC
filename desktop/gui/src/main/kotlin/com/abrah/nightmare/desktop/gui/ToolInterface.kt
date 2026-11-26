@@ -80,10 +80,15 @@ class ToolInterface(
         }
 
         is ToolCommand.SetParameter -> {
-            if (session.setNodeParameter(command.nodeId, command.key, command.value)) {
-                ToolResult.Ok("已设置 ${command.nodeId}.${command.key}")
-            } else {
-                ToolResult.Rejected("节点或参数不存在：${command.nodeId}.${command.key}")
+            // A rejected steps edit must explain the cap instead of masquerading
+            // as a missing node/parameter, so the model can retry with a legal value.
+            val stepsRejection = if (command.key == "steps") stepsRejectionReason(command.value) else null
+            when {
+                stepsRejection != null -> ToolResult.Rejected(stepsRejection)
+                session.setNodeParameter(command.nodeId, command.key, command.value) ->
+                    ToolResult.Ok("已设置 ${command.nodeId}.${command.key}")
+
+                else -> ToolResult.Rejected("节点或参数不存在：${command.nodeId}.${command.key}")
             }
         }
 
@@ -105,7 +110,19 @@ class ToolInterface(
             runControl.runSnapshot().status == RunStatus.RUNNING ->
                 ToolResult.Rejected("已有运行在进行中")
 
-            runControl.triggerRun() -> ToolResult.Ok("已触发运行")
+            runControl.triggerRun() -> {
+                // triggerRun() blocks until the CLI child exits, so this is the
+                // terminal 运行态 the result panel renders — a failure or a
+                // cancel must not be reported to the model as a generated image.
+                val final = runControl.runSnapshot()
+                when (final.status) {
+                    RunStatus.SUCCESS -> ToolResult.Ok("已触发运行并成功出图")
+                    RunStatus.FAILURE, RunStatus.CANCELLED ->
+                        ToolResult.Rejected("运行失败：${final.error ?: final.firstReason ?: final.status}")
+
+                    else -> ToolResult.Rejected("运行失败：${final.status}")
+                }
+            }
 
             else -> ToolResult.Rejected("无法触发运行（运行可能已在进行中）")
         }

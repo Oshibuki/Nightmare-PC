@@ -1,5 +1,6 @@
 package com.abrah.nightmare.desktop.gui
 
+import com.abrah.nightmare.desktop.core.SamplerWire
 import com.abrah.nightmare.desktop.graph.DesktopNodeTypes
 import com.abrah.nightmare.desktop.graph.Workflow
 import java.io.File
@@ -7,6 +8,27 @@ import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+
+/** The one GUI-wide 出图步数上限, shared by edits, prompts and the CLI projection. */
+const val MAX_RUN_STEPS = 20
+
+/**
+ * Clamp only a parseable integer above [MAX_RUN_STEPS]. Values at or below the
+ * cap — and anything unparseable — stay untouched: the CLI owns the error for
+ * bad flags, and the GUI must not silently swallow them.
+ */
+private fun parsedSteps(value: String): Int? = value.trim().toIntOrNull()
+
+private fun cappedSteps(value: String): String {
+    val parsed = parsedSteps(value) ?: return value
+    return if (parsed > MAX_RUN_STEPS) MAX_RUN_STEPS.toString() else value
+}
+
+/** Null means [value] is a legal `steps` edit; otherwise the tool/UI rejection reason. */
+internal fun stepsRejectionReason(value: String): String? {
+    val parsed = parsedSteps(value) ?: return "steps 必须是整数"
+    return if (parsed > MAX_RUN_STEPS) "steps 最大 $MAX_RUN_STEPS" else null
+}
 
 /**
  * Drives the stateless CLI as a child process and owns its handle (ADR-0009).
@@ -207,9 +229,9 @@ class WorkflowRunner(private val config: RunConfig = RunConfig()) {
             ?.let { args += listOf("--negative-prompt", it) }
         samplerNode?.params?.let { params ->
             listOf(
-                "--sampler" to params["sampler"],
-                "--scheduler" to params["scheduler"],
-                "--steps" to params["steps"],
+                "--sampler" to params["sampler"]?.let(::engineSampler),
+                "--scheduler" to params["scheduler"]?.let(::engineScheduler),
+                "--steps" to params["steps"]?.let(::cappedSteps),
                 "--cfg-scale" to params["cfgScale"],
                 "--seed" to params["seed"],
                 "--width" to params["width"],
@@ -223,11 +245,37 @@ class WorkflowRunner(private val config: RunConfig = RunConfig()) {
         return args
     }
 
+    /**
+     * Only the CLI projection and the result metadata are normalized: the
+     * persisted/workflow value keeps exactly what the user or a tool wrote.
+     * Unknown values pass through so the CLI can report the bad flag; the GUI
+     * must not silently swallow them.
+     */
+    private fun engineSampler(value: String): String =
+        engineValue(value, SamplerWire.SAMPLERS, SamplerWire::samplerLabel)
+
+    private fun engineScheduler(value: String): String {
+        // The engine aliases "normal" to "discrete", but this CLI's argv
+        // allowlist rejects the alias, so it needs the canonical word.
+        if (value.equals("normal", ignoreCase = true)) return SamplerWire.DEFAULT_SCHEDULER
+        return engineValue(value, SamplerWire.SCHEDULERS, SamplerWire::schedulerLabel)
+    }
+
+    private fun engineValue(value: String, legal: List<String>, label: (String) -> String): String {
+        if (value in legal) return value
+        val trimmed = value.trim()
+        if (trimmed in legal) return trimmed
+        return legal.firstOrNull { label(it).equals(trimmed, ignoreCase = true) } ?: value
+    }
+
     /** The workflow settings that produced this run, attached to each result. */
     private fun paramsFor(workflow: Workflow): Map<String, String> {
         val prompt = workflow.nodes.firstOrNull { it.type == DesktopNodeTypes.PROMPT }?.params.orEmpty()
         val sampler = workflow.nodes.firstOrNull { it.type == DesktopNodeTypes.SD_SAMPLER }?.params.orEmpty()
-        return prompt + sampler
+        // PNG metadata must describe the run that actually happened, not the
+        // uncapped value someone typed or loaded from an older workflow.
+        val steps = sampler["steps"]?.let(::cappedSteps)
+        return if (steps == null) prompt + sampler else (prompt + sampler) + ("steps" to steps)
     }
 
     /** An explicit config timeout wins; otherwise the shell's field decides. */

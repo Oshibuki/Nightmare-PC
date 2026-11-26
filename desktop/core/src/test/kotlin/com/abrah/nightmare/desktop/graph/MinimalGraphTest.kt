@@ -22,6 +22,8 @@ class MinimalGraphTest {
         assertEquals("core.prompt", prompt.type)
         assertEquals(Position(10f, 20f), prompt.position)
         assertEquals(setOf("prompt", "negative"), prompt.params.keys)
+        assertEquals("euler", sampler.params["sampler"])
+        assertEquals("discrete", sampler.params["scheduler"])
         assertEquals("20", sampler.params["steps"])
         assertEquals("core.output", output.type)
         assertEquals(300f, DesktopNodeTypes.output.defaultWidth, 0f)
