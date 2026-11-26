@@ -1,9 +1,13 @@
 # Spec: nightmare-mobile 跨平台迁移（Windows / Linux / macOS）
 
-Status: ready-for-agent
+Status: resolved
 Type: spec
 
 > 领域术语见根 `GLOSSARY.md`（Nightmare Desktop、无头引擎、桌面补丁集、复制式复用、纵向切片）；决策依据见 `docs/adr/0001`–`0006`。工单见 `issues/01–25`。测试接缝沿用此前已确认的两条（CLI 端到端、Gradle 测试源集），不新增接缝。
+
+## Completion (2026-11-26)
+
+全部 24 张工单关闭：20 张 `resolved`、4 张 `wontfix`（19/20/21/23 视频/DiT E2E，规格明确可放弃、不阻塞交付）。Phase 0/1/2 已交付并合并到 `main`（tag `phase2-gui`，随后多次交付跟进）。验证证据见 `desktop/verify-gui.sh`（`verify-gui: PASS`）与各工单 `## Comments`。
 
 ## Problem Statement
 
