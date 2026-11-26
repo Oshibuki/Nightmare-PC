@@ -120,6 +120,78 @@ class ProviderChatModelTest {
         assertTrue("打开设置" in providerIssueText(error.text))
     }
 
+    @Test(timeout = 10_000)
+    fun `a keyless custom provider still builds the client for its local model`() {
+        val settings = ChatProviderSettings(
+            env = {
+                mapOf(
+                    ChatProviderSettings.ENV_PROVIDER to "CUSTOM",
+                    ChatProviderSettings.ENV_BASE_URL to "http://127.0.0.1:13305/v1",
+                    ChatProviderSettings.ENV_MODEL to "Qwen3.5-4B-GGUF",
+                )
+            },
+            probe = { throw AssertionError("an explicit model needs no probe") },
+        )
+        val seen = mutableListOf<ChatProviderConfig>()
+        val model = ProviderChatModel(settings) { config ->
+            seen += config
+            ChatModel { _, _ -> JSONObject().put("content", "local ok") }
+        }
+
+        val answer = model.complete(JSONArray(), JSONArray())
+
+        assertEquals("local ok", answer.optString("content"))
+        assertEquals(1, seen.size)
+        assertEquals(Provider.CUSTOM, seen.single().provider)
+        assertEquals("", seen.single().key)
+        assertEquals("http://127.0.0.1:13305/v1", seen.single().baseUrl)
+        assertEquals("Qwen3.5-4B-GGUF", seen.single().model)
+    }
+
+    @Test(timeout = 10_000)
+    fun `all five hosted providers still require a key before a client is built`() {
+        Provider.entries.filter { it != Provider.CUSTOM }.forEach { hosted ->
+            val settings = ChatProviderSettings(
+                env = { mapOf(ChatProviderSettings.ENV_PROVIDER to hosted.name) },
+                probe = { throw AssertionError("no probe without configuration") },
+            )
+            val model = ProviderChatModel(settings) { throw AssertionError("no client without a key for $hosted") }
+
+            val error = assertLlmError { model.complete(JSONArray(), JSONArray()) }
+
+            assertEquals(hosted.name, ProviderIssue.UNCONFIGURED, providerIssueOf(error.message.orEmpty()))
+        }
+    }
+
+    @Test(timeout = 10_000)
+    fun `the production client sends a keyless custom turn without an authorization header`() {
+        val (baseUrl, awaitRequest) = fakeHttpServer(
+            JSONObject().put(
+                "choices",
+                JSONArray().put(JSONObject().put("message", JSONObject().put("content", "local ok"))),
+            ).toString(),
+        )
+        val settings = ChatProviderSettings(
+            env = {
+                mapOf(
+                    ChatProviderSettings.ENV_PROVIDER to "CUSTOM",
+                    ChatProviderSettings.ENV_BASE_URL to baseUrl,
+                    ChatProviderSettings.ENV_MODEL to "Qwen3.5-4B-GGUF",
+                )
+            },
+        )
+
+        val answer = ProviderChatModel(settings).complete(
+            JSONArray().put(JSONObject().put("role", "user").put("content", "hello")),
+            JSONArray(),
+        )
+
+        assertEquals("local ok", answer.optString("content"))
+        val request = awaitRequest()
+        assertTrue("path is chat completions", request.lines().first().contains("/chat/completions"))
+        assertFalse("no Authorization header", "authorization" in request.lowercase())
+    }
+
     private fun assertLlmError(block: () -> Unit): LlmError {
         try {
             block()

@@ -37,7 +37,9 @@ fun providerIssueText(message: String): String = when (providerIssueOf(message))
 /**
  * Production ChatModel: resolves the settings on every turn so a dialog save
  * takes effect without rebuilding the agent, then hands off to the copied
- * :core [LlmClient]. A blank key or base URL fails locally — no network call.
+ * :core [LlmClient]. A blank base URL fails locally for every provider; a blank
+ * key fails for the five hosted ones, while CUSTOM may be a keyless local
+ * OpenAI-compatible server — no network call until the guard passes.
  */
 class ProviderChatModel(
     private val settings: ChatProviderSettings,
@@ -53,7 +55,7 @@ class ProviderChatModel(
 
     override fun complete(messages: JSONArray, tools: JSONArray): JSONObject {
         val config = settings.resolved()
-        if (config.key.isBlank() || config.baseUrl.isBlank()) {
+        if (config.baseUrl.isBlank() || (config.key.isBlank() && config.provider != Provider.CUSTOM)) {
             throw LlmError("$UNCONFIGURED_MARKER：请打开设置填写 provider、base URL 和密钥。")
         }
         val model = try {
