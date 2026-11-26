@@ -22,6 +22,7 @@ import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +37,10 @@ import androidx.compose.ui.unit.sp
 import com.abrah.nightmare.agent.ChatItem
 import com.abrah.nightmare.desktop.graph.DesktopNodeTypes
 import com.abrah.nightmare.desktop.graph.Node
+import com.abrah.nightmare.desktop.gui.ui.AppButton
+import com.abrah.nightmare.desktop.gui.ui.AppCard
+import com.abrah.nightmare.desktop.gui.ui.AppText
+import com.abrah.nightmare.desktop.gui.ui.AppTheme
 
 /**
  * 对话模式 shell (prototype variant B): a single chat column is the body, the
@@ -61,6 +66,11 @@ fun ChatModeScreen(
     var draft by remember { mutableStateOf("") }
     var openNodeId by remember { mutableStateOf<String?>(null) }
     var settingsOpen by remember { mutableStateOf(false) }
+    val bubbleScroll = rememberScrollState()
+    // Follow the newest chat item; earlier bubbles stay readable above.
+    LaunchedEffect(items.size) {
+        bubbleScroll.animateScrollTo(bubbleScroll.maxValue)
+    }
     // The same process-wide settings object the production ChatModel reads.
     val settings = ChatProviderStore.settings
     DisposableEffect(settings) {
@@ -82,7 +92,7 @@ fun ChatModeScreen(
             Column(modifier = Modifier.fillMaxSize().weight(0.62f)) {
                 Column(
                     modifier = Modifier.fillMaxSize().weight(1f)
-                        .verticalScroll(rememberScrollState())
+                        .verticalScroll(bubbleScroll)
                         .padding(horizontal = 20.dp, vertical = 12.dp),
                 ) {
                     items.forEach { bubble ->
@@ -191,83 +201,102 @@ private fun ChatBubble(
 ) {
     val mine = item is ChatItem.User
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = AppTheme.dims.spaceSm),
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
     ) {
         val background = when (item) {
-            is ChatItem.User -> Color(0xFF3F6FC7)
-            is ChatItem.Error -> Color(0xFFFDECEA)
-            is ChatItem.Tool -> Color(0xFFEDF2FA)
-            is ChatItem.Ask -> Color(0xFFFFF4DE)
-            is ChatItem.Picture -> Color(0xFFE7F5EA)
-            else -> Color.White
+            is ChatItem.User -> AppTheme.colors.primary
+            is ChatItem.Error -> AppTheme.colors.dangerSurface
+            is ChatItem.Tool -> AppTheme.colors.toolSurface
+            is ChatItem.Ask -> AppTheme.colors.askSurface
+            is ChatItem.Picture -> AppTheme.colors.successSurface
+            else -> AppTheme.colors.surface
         }
-        val ink = if (mine) Color.White else Color(0xFF243049)
-        Column(
-            modifier = Modifier.fillMaxWidth(0.84f)
-                .background(background, RoundedCornerShape(12.dp))
-                .padding(12.dp),
+        val ink = if (mine) AppTheme.colors.onPrimary else AppTheme.colors.ink
+        AppCard(
+            modifier = Modifier.fillMaxWidth(0.84f),
+            color = background,
+            padding = AppTheme.dims.spaceMd,
         ) {
             when (item) {
                 is ChatItem.User -> {
-                    Text("我", color = ink, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                    Text(item.text, color = ink)
+                    AppText("我", color = ink, fontWeight = FontWeight.Bold, fontSize = AppTheme.typography.caption)
+                    AppText(item.text, color = ink)
                 }
 
                 is ChatItem.Assistant -> {
-                    Text("助手", color = Color(0xFF66738C), fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                    Text(item.text, color = ink)
+                    AppText(
+                        "助手",
+                        color = AppTheme.colors.muted,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = AppTheme.typography.caption,
+                    )
+                    AppText(item.text, color = ink)
                 }
 
                 is ChatItem.Tool -> {
-                    Text("工具 · ${item.name}", color = Color(0xFF66738C), fontSize = 11.sp)
-                    Text(item.summary, color = ink)
-                    Text(
+                    AppText("工具 · ${item.name}", color = AppTheme.colors.muted, fontSize = AppTheme.typography.caption)
+                    AppText(item.summary, color = ink)
+                    AppText(
                         if (item.ok) "已接受" else "被拒绝",
-                        color = if (item.ok) Color(0xFF2E7D4F) else Color(0xFFB23B3B),
-                        fontSize = 11.sp,
+                        color = if (item.ok) AppTheme.colors.successInk else AppTheme.colors.danger,
+                        fontSize = AppTheme.typography.caption,
                     )
                 }
 
                 is ChatItem.Picture -> {
-                    Text("生成图片", color = Color(0xFF2E7D4F), fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                    Text(item.path, color = ink, fontSize = 12.sp)
+                    AppText(
+                        "生成图片",
+                        color = AppTheme.colors.successInk,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = AppTheme.typography.caption,
+                    )
+                    AppText(item.path, color = ink, fontSize = AppTheme.typography.bodySmall)
                 }
 
                 is ChatItem.Error -> {
                     val issue = providerIssueOf(item.text)
-                    Text("错误", color = Color(0xFFB23B3B), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    AppText(
+                        "错误",
+                        color = AppTheme.colors.danger,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = AppTheme.typography.caption,
+                    )
                     // Two provider classes get fixed, key-free text and a settings exit.
                     // No retry is triggered here and the workflow is untouched.
-                    Text(
+                    AppText(
                         if (issue == ProviderIssue.OTHER) item.text else providerIssueText(item.text),
-                        color = Color(0xFF9B2C2C),
+                        color = AppTheme.colors.dangerInk,
                     )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Button(onClick = onOpenSettings) { Text("打开设置", fontSize = 12.sp) }
+                    Spacer(modifier = Modifier.height(AppTheme.dims.spaceSm))
+                    AppButton("打开设置", onClick = onOpenSettings)
                 }
 
                 is ChatItem.Ask -> {
-                    Text("追问", color = Color(0xFF8A6A22), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Text(item.question, color = ink)
+                    AppText(
+                        "追问",
+                        color = AppTheme.colors.askInk,
+                        fontSize = AppTheme.typography.caption,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    AppText(item.question, color = ink)
                     if (item.answer == AskGate.CANCEL) {
-                        Text("已取消", color = Color(0xFF8A6A22), fontSize = 12.sp)
+                        AppText("已取消", color = AppTheme.colors.askInk, fontSize = AppTheme.typography.bodySmall)
                     } else {
                         item.options.forEach { option ->
                             val chosen = item.answer == option
-                            Button(
+                            AppButton(
+                                text = if (chosen) "✓ $option" else option,
                                 onClick = { onAnswer(item.id, option) },
                                 enabled = item.answer == null,
-                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    backgroundColor = if (chosen) Color(0xFFE2C678) else Color.White,
-                                    contentColor = Color(0xFF243049),
-                                ),
-                            ) {
-                                Text(if (chosen) "✓ $option" else option, fontSize = 12.sp)
-                            }
+                                modifier = Modifier.fillMaxWidth().padding(top = AppTheme.dims.spaceXs),
+                                backgroundColor = if (chosen) AppTheme.colors.askSelected else AppTheme.colors.surface,
+                                contentColor = AppTheme.colors.ink,
+                            )
                         }
-                        item.answer?.let { Text("已选择：$it", color = ink, fontSize = 11.sp) }
+                        item.answer?.let {
+                            AppText("已选择：$it", color = ink, fontSize = AppTheme.typography.caption)
+                        }
                     }
                 }
 

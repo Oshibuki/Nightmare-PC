@@ -1,5 +1,6 @@
 package com.abrah.nightmare.desktop.gui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +26,7 @@ import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -33,9 +35,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.decodeToImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.abrah.nightmare.desktop.gui.ui.AppCard
+import com.abrah.nightmare.desktop.gui.ui.AppText
+import com.abrah.nightmare.desktop.gui.ui.AppTheme
+import java.io.File
 
 /**
  * 默认模式 shell: prototype C's chain rail, large result preview, parameter
@@ -206,6 +214,17 @@ private fun RunStatusBanner(runState: RunSnapshot, modifier: Modifier = Modifier
     }
 }
 
+/**
+ * Reads and decodes a result PNG for the preview. A missing file or a bad
+ * image becomes `null` so the caller keeps its text fallback instead of
+ * crashing the shell. The decoder is injected so this guarantee is testable
+ * on the JVM without loading Skiko natives.
+ */
+internal fun <T> loadPreviewSafely(path: String, decoder: (ByteArray) -> T): T? {
+    if (path.isBlank()) return null
+    return runCatching { decoder(File(path).readBytes()) }.getOrNull()
+}
+
 @Composable
 internal fun ResultPreview(
     preview: PreviewInfo,
@@ -215,38 +234,71 @@ internal fun ResultPreview(
 ) {
     val latest = results.lastOrNull()
     Box(
-        modifier = modifier.fillMaxSize().background(Color(0xFF1E2431)),
+        modifier = modifier.fillMaxSize().background(AppTheme.colors.previewSurface),
         contentAlignment = Alignment.Center,
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth(0.74f)
-                .aspectRatio(1f)
-                .background(Color(0xFF2E3A52), RoundedCornerShape(12.dp))
-                .padding(24.dp),
+        AppCard(
+            // The empty placeholder keeps its square shape; a real image grows
+            // the card instead of overflowing a fixed square on small windows.
+            modifier = Modifier.fillMaxWidth(0.74f)
+                .then(if (latest == null) Modifier.aspectRatio(1f) else Modifier),
+            color = AppTheme.colors.cardSurface,
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             if (latest != null) {
-                Text("生成成功", color = Color(0xFF9BE0A6), fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(latest.path, color = Color.White, fontSize = 13.sp)
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(paramsSummary(latest.params), color = Color(0xFFCFD8EA), fontSize = 12.sp)
+                AppText(
+                    "生成成功",
+                    color = AppTheme.colors.success,
+                    fontSize = AppTheme.typography.title,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(modifier = Modifier.height(AppTheme.dims.spaceMd))
+                // Decode once per artifact path. Skiko ships with
+                // compose.desktop.currentOs; a missing or corrupt PNG simply
+                // keeps the original text information below.
+                val thumbnail = remember(latest.path) {
+                    loadPreviewSafely(latest.path) { bytes -> bytes.decodeToImageBitmap() }
+                }
+                if (thumbnail != null) {
+                    Image(
+                        bitmap = thumbnail,
+                        contentDescription = "生成结果缩略图",
+                        modifier = Modifier.fillMaxWidth().height(160.dp),
+                        contentScale = ContentScale.Fit,
+                    )
+                    Spacer(modifier = Modifier.height(AppTheme.dims.spaceMd))
+                }
+                AppText(
+                    latest.path,
+                    color = AppTheme.colors.onCard,
+                    fontSize = AppTheme.typography.body,
+                )
+                Spacer(modifier = Modifier.height(AppTheme.dims.spaceSm))
+                AppText(
+                    paramsSummary(latest.params),
+                    color = AppTheme.colors.onCardMuted,
+                    fontSize = AppTheme.typography.bodySmall,
+                )
             } else {
-                Text(preview.title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(preview.detail, color = Color(0xFFCFD8EA))
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
+                AppText(
+                    preview.title,
+                    color = AppTheme.colors.onCard,
+                    fontSize = AppTheme.typography.title,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(modifier = Modifier.height(AppTheme.dims.spaceMd))
+                AppText(preview.detail, color = AppTheme.colors.onCardMuted)
+                Spacer(modifier = Modifier.height(AppTheme.dims.spaceSm))
+                AppText(
                     when (status) {
                         RunStatus.RUNNING -> "引擎正在生成，逐张进度见下方日志面板。"
                         RunStatus.FAILURE -> "本次运行失败，临时产物已清理；可修改参数后重跑。"
                         RunStatus.CANCELLED -> "本次运行已取消，临时产物已清理；可修改参数后重跑。"
                         else -> "内置工作流已加载；点击「运行」生成 PNG。"
                     },
-                    color = Color(0xFF9FADC7),
-                    fontSize = 12.sp,
+                    color = AppTheme.colors.onCardFaint,
+                    fontSize = AppTheme.typography.bodySmall,
                 )
             }
         }
@@ -264,19 +316,25 @@ private fun paramsSummary(params: Map<String, String>): String = listOfNotNull(
 /** One panel for both structured progress events and unmodified engine output. */
 @Composable
 internal fun RunLogPanel(runState: RunSnapshot, modifier: Modifier = Modifier) {
+    val scrollState = rememberScrollState()
+    // Follow newly appended engine output; older lines stay readable above.
+    LaunchedEffect(runState.log.size) {
+        scrollState.animateScrollTo(scrollState.maxValue)
+    }
     Column(
-        modifier = modifier.background(Color(0xFF141A26)).padding(horizontal = 16.dp, vertical = 10.dp),
+        modifier = modifier.background(AppTheme.colors.logSurface)
+            .padding(horizontal = AppTheme.dims.spaceLg, vertical = 10.dp),
     ) {
-        Text(
+        AppText(
             "运行日志 · 进度事件 ${runState.progress.size} 条 · 引擎输出 ${runState.log.size} 行",
-            color = Color.White,
+            color = AppTheme.colors.onCard,
             fontWeight = FontWeight.Bold,
-            fontSize = 13.sp,
+            fontSize = AppTheme.typography.body,
         )
-        Spacer(modifier = Modifier.height(6.dp))
-        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Spacer(modifier = Modifier.height(AppTheme.dims.spaceSm))
+        Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState)) {
             runState.log.takeLast(80).forEach { line ->
-                Text(line, color = Color(0xFFB8C6DE), fontSize = 11.sp)
+                AppText(line, color = AppTheme.colors.logInk, fontSize = AppTheme.typography.caption)
             }
         }
     }
