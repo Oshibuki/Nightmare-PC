@@ -87,10 +87,20 @@ assert_called_after() {
 STUB_CALLS="$TMP/gradle-calls.txt"
 export STUB_CALLS
 : > "$STUB_CALLS"
+# Record the engine env the real-smoke JVM test would see, so selection can be
+# asserted without a GPU or a real engine.
+STUB_SMOKE_ENGINE="$TMP/smoke-engine.txt"
+export STUB_SMOKE_ENGINE
+: > "$STUB_SMOKE_ENGINE"
 STUB="$TMP/gradlew"
 cat > "$STUB" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_CALLS"
+case "$*" in
+  *Img2ImgRealE2ETest*)
+    printf '%s\n' "${NIGHTMARE_SD_BIN:-<unset>}" >> "$STUB_SMOKE_ENGINE"
+    ;;
+esac
 printf 'stub gradle invoked: %s\n' "$*"
 if [ -n "${STUB_FAIL_ON:-}" ]; then
   case "$*" in
@@ -302,6 +312,110 @@ rc=$?
 assert_eq "a hung chat-turn is killed by its hard timeout" 124 "$rc"
 assert_contains "timeout failure recorded in chat-turn log" "$CASE_LOGS/verify-gui-chat-turn.log" "verify-gui: FAILED at chat-turn (exit 124)"
 assert_not_contains "no persistence after chat-turn timeout" "$STUB_CALLS" "WorkflowPersistenceTest"
+
+# ---- case 8: no explicit engine -> real-smoke uses the Vulkan wrapper ------
+
+FAKE_VULKAN="$TMP/fake-vulkan"
+printf '#!/bin/sh\nexit 0\n' > "$FAKE_VULKAN"
+chmod +x "$FAKE_VULKAN"
+
+CASE_LOGS="$TMP/logs-vulkan"
+CASE_OUT="$TMP/out-vulkan"
+mkdir -p "$CASE_LOGS"
+: > "$STUB_CALLS"
+: > "$STUB_SMOKE_ENGINE"
+env -u NIGHTMARE_SD_BIN \
+VERIFY_GUI_VULKAN_BIN="$FAKE_VULKAN" \
+NIGHTMARE_MODELS="$MODELS" \
+VERIFY_GUI_GRADLE="$STUB" \
+VERIFY_GUI_LOG_DIR="$CASE_LOGS" \
+timeout 30 bash "$SCRIPT" > "$CASE_OUT" 2>&1
+rc=$?
+
+assert_eq "vulkan-default run exits 0" 0 "$rc"
+assert_contains "real smoke runs under the Vulkan default" "$STUB_CALLS" "Img2ImgRealE2ETest"
+assert_contains "Vulkan choice is logged" "$CASE_LOGS/verify-gui-real-smoke.log" "默认走 Vulkan 加速"
+assert_contains "VRAM override is logged" "$CASE_LOGS/verify-gui-real-smoke.log" "--max-vram 0"
+WRAPPER="$CASE_LOGS/sd-cli-vulkan-wrapper.sh"
+if [ -x "$WRAPPER" ]; then
+  ok "Vulkan wrapper exists and is executable"
+else
+  not_ok "Vulkan wrapper missing or not executable: $WRAPPER"
+fi
+assert_contains "wrapper injects --max-vram 0" "$WRAPPER" "--max-vram 0"
+assert_contains "wrapper targets the injected Vulkan binary" "$WRAPPER" "$FAKE_VULKAN"
+assert_contains "cli test receives the wrapper path" "$STUB_SMOKE_ENGINE" "$WRAPPER"
+assert_contains "vulkan-default run passes" "$CASE_OUT" "verify-gui: PASS"
+
+# ---- case 9: an explicit NIGHTMARE_SD_BIN is never overridden -------------
+
+CASE_LOGS="$TMP/logs-explicit-engine"
+CASE_OUT="$TMP/out-explicit-engine"
+mkdir -p "$CASE_LOGS"
+: > "$STUB_CALLS"
+: > "$STUB_SMOKE_ENGINE"
+NIGHTMARE_SD_BIN="$ENGINE" \
+VERIFY_GUI_VULKAN_BIN="$FAKE_VULKAN" \
+NIGHTMARE_MODELS="$MODELS" \
+VERIFY_GUI_GRADLE="$STUB" \
+VERIFY_GUI_LOG_DIR="$CASE_LOGS" \
+timeout 30 bash "$SCRIPT" > "$CASE_OUT" 2>&1
+rc=$?
+
+assert_eq "explicit-engine run exits 0" 0 "$rc"
+assert_contains "explicit choice is logged" "$CASE_LOGS/verify-gui-real-smoke.log" "调用方显式指定的引擎"
+assert_not_contains "no Vulkan selection with an explicit engine" "$CASE_LOGS/verify-gui-real-smoke.log" "Vulkan"
+assert_contains "cli test receives the explicit engine" "$STUB_SMOKE_ENGINE" "$ENGINE"
+assert_contains "real smoke still runs with an explicit engine" "$STUB_CALLS" "Img2ImgRealE2ETest"
+if [ -e "$CASE_LOGS/sd-cli-vulkan-wrapper.sh" ]; then
+  not_ok "no wrapper should be created for an explicit engine"
+else
+  ok "no wrapper created for an explicit engine"
+fi
+
+# ---- case 10: missing Vulkan binary falls back to the CPU engine ----------
+
+CASE_LOGS="$TMP/logs-vulkan-fallback"
+CASE_OUT="$TMP/out-vulkan-fallback"
+mkdir -p "$CASE_LOGS"
+: > "$STUB_CALLS"
+: > "$STUB_SMOKE_ENGINE"
+env -u NIGHTMARE_SD_BIN \
+VERIFY_GUI_VULKAN_BIN="$TMP/no-such-vulkan" \
+NIGHTMARE_MODELS="$MODELS" \
+VERIFY_GUI_GRADLE="$STUB" \
+VERIFY_GUI_LOG_DIR="$CASE_LOGS" \
+timeout 30 bash "$SCRIPT" > "$CASE_OUT" 2>&1
+rc=$?
+
+assert_eq "vulkan-fallback run exits 0" 0 "$rc"
+assert_contains "fallback reason is logged" "$CASE_LOGS/verify-gui-real-smoke.log" "回退 CPU 引擎"
+assert_not_contains "no Vulkan selection when the binary is absent" "$CASE_LOGS/verify-gui-real-smoke.log" "默认走 Vulkan 加速"
+CPU_BIN="$HOME/.cache/nightmare-desktop/engine/sd-cli"
+if [ -x "$CPU_BIN" ]; then
+  assert_contains "cli test receives the CPU engine" "$STUB_SMOKE_ENGINE" "$CPU_BIN"
+else
+  assert_contains "CPU engine absent is a documented skip" "$CASE_LOGS/verify-gui-real-smoke.log" "已跳过（无引擎二进制）"
+fi
+
+# ---- case 11: wrapper creation failure falls back to the CPU engine -------
+
+CASE_LOGS="$TMP/logs-wrapper-fail"
+CASE_OUT="$TMP/out-wrapper-fail"
+mkdir -p "$CASE_LOGS/sd-cli-vulkan-wrapper.sh" # a directory blocks the write
+: > "$STUB_CALLS"
+: > "$STUB_SMOKE_ENGINE"
+env -u NIGHTMARE_SD_BIN \
+VERIFY_GUI_VULKAN_BIN="$FAKE_VULKAN" \
+NIGHTMARE_MODELS="$MODELS" \
+VERIFY_GUI_GRADLE="$STUB" \
+VERIFY_GUI_LOG_DIR="$CASE_LOGS" \
+timeout 30 bash "$SCRIPT" > "$CASE_OUT" 2>&1
+rc=$?
+
+assert_eq "wrapper-failure run exits 0" 0 "$rc"
+assert_contains "wrapper failure is logged" "$CASE_LOGS/verify-gui-real-smoke.log" "wrapper 创建失败，回退 CPU 引擎"
+assert_not_contains "no Vulkan selection when the wrapper fails" "$CASE_LOGS/verify-gui-real-smoke.log" "默认走 Vulkan 加速"
 
 # ---- summary --------------------------------------------------------------
 
