@@ -11,3 +11,5 @@ Five canonical roles map to `needs-triage`, `needs-info`, `ready-for-agent`, `re
 ### Domain docs
 
 Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+Desktop manual GUI launch variables, preflight and cache-free verification: [`desktop/docs/gui-launch-config.md`](desktop/docs/gui-launch-config.md).

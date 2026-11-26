@@ -60,6 +60,7 @@ What it checks, in order:
 | Step | Command | Log in `/tmp` | Timeout |
 | --- | --- | --- | --- |
 | GUI compile | `:gui:classes` | `verify-gui-classes.log` | 900 s |
+| Launch config | `preflight-gui-launch.sh` (no Gradle) | `verify-gui-launch-config.log` | 30 s |
 | Full build | `build` (all JVM tests) | `verify-gui-build.log` | 900 s |
 | Fake CLI runner E2E | `:gui:test` with `WorkflowRunnerTest`, `ToolInterfaceTest`, `DefaultModeStateTest`, `AdvancedModeStateTest` | `verify-gui-fake-runner.log` | 600 s |
 | Chat turn (fake ChatModel + fake CLI) | `:gui:test` with `FakeChatModelWorkflowTest`, `ChatSessionTest`, `AskSessionTest`, `TurnLifecycleTest` | `verify-gui-chat-turn.log` | 600 s |
@@ -75,11 +76,22 @@ test, and any failed test gives a non-zero exit. Logs live in
 | --- | --- |
 | `VERIFY_GUI_GRADLE` | Gradle launcher, default `./gradlew` |
 | `VERIFY_GUI_LOG_DIR` | log directory, default `/tmp` |
+| `VERIFY_GUI_PREFLIGHT` | preflight launcher, default `./preflight-gui-launch.sh`; test seam only |
+| `VERIFY_GUI_NO_CACHE` | set to `1` to append `--no-build-cache --rerun-tasks` to every Gradle call; default `0` leaves them unchanged |
 | `VERIFY_GUI_CHAT_TURN_TIMEOUT` | chat-turn seconds, default 600 |
 | `VERIFY_GUI_SMOKE_TIMEOUT` | real-smoke seconds, default 1800 |
 | `NIGHTMARE_MODELS` | model cache root, default `~/.cache/nightmare-desktop/models` |
 | `NIGHTMARE_SD_BIN` | explicit engine binary; when set it wins verbatim (no Vulkan wrapper). Otherwise real-smoke picks the engine as described below |
 | `VERIFY_GUI_VULKAN_BIN` | Vulkan engine used by the real-smoke wrapper, default `~/.cache/nightmare-desktop/engine/sd-cli-vulkan`; mainly a test seam |
+
+Right after the compile step, the `launch-config` step runs
+`preflight-gui-launch.sh`: it validates any manually set `NIGHTMARE_GUI_CLI`,
+`NIGHTMARE_SD_BIN` or `NIGHTMARE_GUI_MODEL` and fails fast with fix guidance,
+but prints `未设置手动启动配置，preflight 跳过` and exits 0 when none are set, so
+headless runs stay green (see [gui-launch-config.md](docs/gui-launch-config.md)).
+Set `VERIFY_GUI_NO_CACHE=1` to append `--no-build-cache --rerun-tasks` to every
+Gradle call and force real re-execution instead of a green cache hit; the
+default leaves every command line unchanged.
 
 The real smoke is optional. If
 `$NIGHTMARE_MODELS/sd15/v1-5-pruned-emaonly.safetensors` is absent the script

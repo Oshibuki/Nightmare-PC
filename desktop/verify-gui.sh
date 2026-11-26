@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 # Phase 2 GUI acceptance in one bounded command (ADR-0011).
 #
-# Steps, in order: :gui:classes -> full build (all JVM tests) -> the fake CLI
-# runner end-to-end tests -> chat turns (fake ChatModel + fake CLI, including
-# Ask answer/cancel) -> workflow persistence -> optional real SD1.5 smoke
-# -> optional GUI launch. Every step has a hard timeout and an appended log in
-# VERIFY_GUI_LOG_DIR (default /tmp); any non-zero exit stops the run and leaves
-# all logs in place. Missing weights skip the real smoke without failing.
+# Steps, in order: :gui:classes -> manual-launch preflight -> full build (all
+# JVM tests) -> the fake CLI runner end-to-end tests -> chat turns (fake
+# ChatModel + fake CLI, including Ask answer/cancel) -> workflow persistence
+# -> optional real SD1.5 smoke -> optional GUI launch. Every step has a hard
+# timeout and an appended log in VERIFY_GUI_LOG_DIR (default /tmp); any
+# non-zero exit stops the run and leaves all logs in place. Missing weights
+# skip the real smoke without failing.
 #
 # Overrides (mostly for CI/test harnesses; see desktop/README.md):
 #   VERIFY_GUI_GRADLE      gradle launcher (default ./gradlew)
 #   VERIFY_GUI_LOG_DIR     log directory (default /tmp)
+#   VERIFY_GUI_PREFLIGHT   preflight launcher (default ./preflight-gui-launch.sh)
+#   VERIFY_GUI_NO_CACHE=1  append --no-build-cache --rerun-tasks to EVERY
+#                          Gradle call, so a cache hit cannot fake a green run;
+#                          the default (0) leaves the command lines unchanged
 #   VERIFY_GUI_CHAT_TURN_TIMEOUT  seconds for chat-turn (default 600)
 #   VERIFY_GUI_SMOKE_TIMEOUT  seconds for the real smoke (default 1800)
 #   VERIFY_GUI_LAUNCH=1    also launch the GUI once (uses DISPLAY or xvfb-run)
@@ -39,6 +44,14 @@ SMOKE_TIMEOUT="${VERIFY_GUI_SMOKE_TIMEOUT:-1800}"
 MODELS_ROOT="${NIGHTMARE_MODELS:-$HOME/.cache/nightmare-desktop/models}"
 MODEL_FILE="$MODELS_ROOT/sd15/v1-5-pruned-emaonly.safetensors"
 ENGINE_BIN="${NIGHTMARE_SD_BIN:-$HOME/.cache/nightmare-desktop/engine/sd-cli}"
+PREFLIGHT="${VERIFY_GUI_PREFLIGHT:-$HERE/preflight-gui-launch.sh}"
+
+# Keep the default command lines untouched. Opting out of the build cache is
+# the honest-run switch: no cached outputs, every task actually re-executed.
+CACHE_FLAGS=()
+if [ "${VERIFY_GUI_NO_CACHE:-0}" = "1" ]; then
+  CACHE_FLAGS=(--no-build-cache --rerun-tasks)
+fi
 
 mkdir -p "$LOG_DIR" || exit 1
 
@@ -73,17 +86,23 @@ printf 'verify-gui: starting in %s; logs in %s\n' "$HERE" "$LOG_DIR"
 
 # 1. GUI sources compile without needing a display.
 run_step gui-classes 900 "$LOG_DIR/verify-gui-classes.log" \
-  "$GRADLE" --no-daemon :gui:classes || fail_step
+  "$GRADLE" --no-daemon "${CACHE_FLAGS[@]}" :gui:classes || fail_step
+
+# 1a. Manual-launch preflight, right after the compile seam so a bad injected
+#     path stops the run before any slow build. The preflight itself no-ops
+#     when no manual config is set, so headless/CI runs are unaffected.
+run_step launch-config 30 "$LOG_DIR/verify-gui-launch-config.log" \
+  "$PREFLIGHT" || fail_step
 
 # 2. Everything else: :core, :cli and :gui plus every JVM test.
 run_step build 900 "$LOG_DIR/verify-gui-build.log" \
-  "$GRADLE" --no-daemon build || fail_step
+  "$GRADLE" --no-daemon "${CACHE_FLAGS[@]}" build || fail_step
 
 # 3. The fake CLI runner end-to-end seam, re-run explicitly so its result has
 #    its own log. Each named class is asserted by Gradle: --tests fails when a
 #    filter matches nothing, and any failed test gives a non-zero exit.
 run_step fake-runner 600 "$LOG_DIR/verify-gui-fake-runner.log" \
-  "$GRADLE" --no-daemon :gui:test \
+  "$GRADLE" --no-daemon "${CACHE_FLAGS[@]}" :gui:test \
   --tests com.abrah.nightmare.desktop.gui.WorkflowRunnerTest \
   --tests com.abrah.nightmare.desktop.gui.ToolInterfaceTest \
   --tests com.abrah.nightmare.desktop.gui.DefaultModeStateTest \
@@ -97,7 +116,7 @@ run_step fake-runner 600 "$LOG_DIR/verify-gui-fake-runner.log" \
 #    filters are named so an empty match fails the step; no key or network is
 #    needed and no real provider is contacted.
 run_step chat-turn "$CHAT_TURN_TIMEOUT" "$LOG_DIR/verify-gui-chat-turn.log" \
-  "$GRADLE" --no-daemon :gui:test \
+  "$GRADLE" --no-daemon "${CACHE_FLAGS[@]}" :gui:test \
   --tests com.abrah.nightmare.desktop.gui.fake.FakeChatModelWorkflowTest \
   --tests com.abrah.nightmare.desktop.gui.ChatSessionTest \
   --tests com.abrah.nightmare.desktop.gui.AskSessionTest \
@@ -106,7 +125,7 @@ run_step chat-turn "$CHAT_TURN_TIMEOUT" "$LOG_DIR/verify-gui-chat-turn.log" \
 # 5. Workflow save/load/version-compat seam, also part of `build` above but
 #    kept visible here as a separate, bounded assertion.
 run_step persistence 600 "$LOG_DIR/verify-gui-persistence.log" \
-  "$GRADLE" --no-daemon :core:test \
+  "$GRADLE" --no-daemon "${CACHE_FLAGS[@]}" :core:test \
   --tests com.abrah.nightmare.desktop.graph.WorkflowPersistenceTest || fail_step
 
 # A real LLM provider smoke stays a manual, optional check: it needs
@@ -164,7 +183,7 @@ if [ -f "$MODEL_FILE" ]; then
   select_smoke_engine
   if [ -x "$ENGINE_BIN" ]; then
     run_step real-smoke "$SMOKE_TIMEOUT" "$SMOKE_LOG" \
-      "$GRADLE" --no-daemon :cli:test \
+      "$GRADLE" --no-daemon "${CACHE_FLAGS[@]}" :cli:test \
       --tests com.abrah.nightmare.desktop.cli.Img2ImgRealE2ETest || fail_step
   else
     printf 'verify-gui: real-smoke 已跳过（无引擎二进制）: %s\n' "$ENGINE_BIN" | tee -a "$SMOKE_LOG"
@@ -192,7 +211,7 @@ if [ "${VERIFY_GUI_LAUNCH:-0}" = "1" ]; then
   fi
   if [ "$can_launch" -eq 1 ]; then
     ALLOW_TIMEOUT_RC=1 run_step gui-launch 60 "$LAUNCH_LOG" \
-      "${prefix[@]}" "$GRADLE" --no-daemon :gui:run || fail_step
+      "${prefix[@]}" "$GRADLE" --no-daemon "${CACHE_FLAGS[@]}" :gui:run || fail_step
   fi
 fi
 

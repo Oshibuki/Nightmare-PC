@@ -35,6 +35,15 @@ assert_eq() {
   fi
 }
 
+assert_exit_code() {
+  local what="$1" expected="$2" actual="$3"
+  if [ "$expected" -eq "$actual" ]; then
+    ok "$what (expected exit $expected)"
+  else
+    not_ok "$what: expected exit $expected, got $actual"
+  fi
+}
+
 assert_contains() {
   local what="$1" file="$2" needle="$3"
   if [ -f "$file" ] && grep -Fq -- "$needle" "$file"; then
@@ -119,6 +128,14 @@ exit 0
 EOF
 chmod +x "$STUB"
 
+# Cases 1 and 4 deliberately inject a non-executable engine to exercise the
+# smoke skip branch. Those cases are about the smoke step, not preflight
+# validation, so they substitute a pass-through preflight. Cases that DO test
+# preflight use the real script.
+PASS_PREFLIGHT="$TMP/preflight-pass-stub"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$PASS_PREFLIGHT"
+chmod +x "$PASS_PREFLIGHT"
+
 # ---- case 1: no weight cache -> smoke skipped, everything else runs -------
 
 CASE_LOGS="$TMP/logs-skip"
@@ -127,6 +144,7 @@ mkdir -p "$CASE_LOGS"
 : > "$STUB_CALLS"
 NIGHTMARE_MODELS="$TMP/no-such-models" \
 NIGHTMARE_SD_BIN="$TMP/no-such-engine" \
+VERIFY_GUI_PREFLIGHT="$PASS_PREFLIGHT" \
 VERIFY_GUI_GRADLE="$STUB" \
 VERIFY_GUI_LOG_DIR="$CASE_LOGS" \
 timeout 30 bash "$SCRIPT" > "$CASE_OUT" 2>&1
@@ -134,8 +152,12 @@ rc=$?
 
 assert_eq "no-cache run exits 0" 0 "$rc"
 assert_has_logs "$CASE_LOGS" \
-  verify-gui-classes.log verify-gui-build.log verify-gui-fake-runner.log \
-  verify-gui-chat-turn.log verify-gui-persistence.log verify-gui-real-smoke.log
+  verify-gui-classes.log verify-gui-launch-config.log verify-gui-build.log \
+  verify-gui-fake-runner.log verify-gui-chat-turn.log \
+  verify-gui-persistence.log verify-gui-real-smoke.log
+assert_contains "launch-config runs by default" "$CASE_LOGS/verify-gui-launch-config.log" "verify-gui: launch-config OK"
+assert_not_contains "default run does not force --no-build-cache" "$STUB_CALLS" "--no-build-cache"
+assert_not_contains "default run does not force --rerun-tasks" "$STUB_CALLS" "--rerun-tasks"
 assert_contains "skip reason" "$CASE_LOGS/verify-gui-real-smoke.log" "已跳过（无权重缓存）"
 assert_contains "classes step" "$STUB_CALLS" ":gui:classes"
 assert_contains "build step" "$STUB_CALLS" " build"
@@ -172,7 +194,7 @@ if [ "$rc" -ne 0 ]; then
 else
   not_ok "failing step must make the script exit non-zero"
 fi
-assert_has_logs "$CASE_LOGS" verify-gui-classes.log verify-gui-build.log
+assert_has_logs "$CASE_LOGS" verify-gui-classes.log verify-gui-launch-config.log verify-gui-build.log
 assert_contains "failure captured in log" "$CASE_LOGS/verify-gui-build.log" "stub forced failure"
 assert_contains "failure summary on stdout" "$CASE_OUT" "verify-gui: FAILED"
 assert_contains "log location on failure" "$CASE_OUT" "$CASE_LOGS"
@@ -214,6 +236,7 @@ mkdir -p "$CASE_LOGS"
 : > "$STUB_CALLS"
 NIGHTMARE_MODELS="$MODELS" \
 NIGHTMARE_SD_BIN="$TMP/no-such-engine" \
+VERIFY_GUI_PREFLIGHT="$PASS_PREFLIGHT" \
 VERIFY_GUI_GRADLE="$STUB" \
 VERIFY_GUI_LOG_DIR="$CASE_LOGS" \
 timeout 30 bash "$SCRIPT" > "$CASE_OUT" 2>&1
@@ -418,6 +441,136 @@ rc=$?
 assert_eq "wrapper-failure run exits 0" 0 "$rc"
 assert_contains "wrapper failure is logged" "$CASE_LOGS/verify-gui-real-smoke.log" "wrapper 创建失败，回退 CPU 引擎"
 assert_not_contains "no Vulkan selection when the wrapper fails" "$CASE_LOGS/verify-gui-real-smoke.log" "默认走 Vulkan 加速"
+
+# ---- case 12: preflight-gui-launch.sh validates manual launch config -------
+
+# The preflight seam is the script's own CLI: env vars in, exit code + text out.
+# It must never need Gradle, the network, or a display. Wipe every relevant
+# variable first so an exported caller environment cannot change a case.
+PREFLIGHT="$ROOT/preflight-gui-launch.sh"
+PF_UNSET=(env -u NIGHTMARE_GUI_CLI -u NIGHTMARE_GUI_MODEL -u NIGHTMARE_SD_BIN
+  -u NIGHTMARE_LLM_PROVIDER -u NIGHTMARE_LLM_BASE_URL -u NIGHTMARE_LLM_KEY)
+
+# 12a: no manual config -> documented skip, exit 0 so headless CI stays green.
+PF_OUT="$TMP/preflight-none"
+"${PF_UNSET[@]}" timeout 30 bash "$PREFLIGHT" > "$PF_OUT" 2>&1
+rc=$?
+assert_exit_code "preflight with no manual config exits 0" 0 "$rc"
+assert_contains "preflight skip is documented" "$PF_OUT" "未设置手动启动配置，preflight 跳过"
+
+# 12b: an injected GUI CLI path must be an executable installDist start script.
+PF_OUT="$TMP/preflight-bad-cli"
+"${PF_UNSET[@]}" NIGHTMARE_GUI_CLI="$TMP/no-such-cli" \
+  timeout 30 bash "$PREFLIGHT" > "$PF_OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  ok "bad NIGHTMARE_GUI_CLI exits non-zero (rc=$rc)"
+else
+  not_ok "bad NIGHTMARE_GUI_CLI must exit non-zero"
+fi
+assert_contains "preflight FAIL marker on bad CLI" "$PF_OUT" "preflight: FAIL"
+assert_contains "preflight names the offending var" "$PF_OUT" "NIGHTMARE_GUI_CLI"
+assert_contains "preflight points to the installDist script" "$PF_OUT" ":cli:installDist"
+assert_contains "preflight warns the CLI is not the engine" "$PF_OUT" "不是引擎"
+
+# 12c: a fully valid manual config (local CUSTOM LLM, no key) passes, and the
+# key value is never echoed even when the caller exports one.
+VALID_CLI="$TMP/valid-cli"
+VALID_ENGINE="$TMP/valid-engine"
+printf '#!/bin/sh\nexit 0\n' > "$VALID_CLI"; chmod +x "$VALID_CLI"
+printf '#!/bin/sh\nexit 0\n' > "$VALID_ENGINE"; chmod +x "$VALID_ENGINE"
+VALID_MODEL="$TMP/valid-model.safetensors"; : > "$VALID_MODEL"
+PF_OUT="$TMP/preflight-ok"
+"${PF_UNSET[@]}" \
+  NIGHTMARE_GUI_CLI="$VALID_CLI" \
+  NIGHTMARE_SD_BIN="$VALID_ENGINE" \
+  NIGHTMARE_GUI_MODEL="$VALID_MODEL" \
+  NIGHTMARE_LLM_PROVIDER=CUSTOM \
+  NIGHTMARE_LLM_BASE_URL="http://127.0.0.1:13305/v1" \
+  NIGHTMARE_LLM_KEY="SECRET_SENTINEL_DO_NOT_PRINT" \
+  timeout 30 bash "$PREFLIGHT" > "$PF_OUT" 2>&1
+rc=$?
+assert_exit_code "preflight with a valid local config exits 0" 0 "$rc"
+assert_contains "preflight PASS marker" "$PF_OUT" "preflight: PASS"
+assert_not_contains "preflight never prints the key value" "$PF_OUT" "SECRET_SENTINEL_DO_NOT_PRINT"
+
+# 12d: CUSTOM provider without a base URL is a clear, separate failure.
+PF_OUT="$TMP/preflight-no-url"
+"${PF_UNSET[@]}" NIGHTMARE_GUI_CLI="$VALID_CLI" \
+  NIGHTMARE_LLM_PROVIDER=CUSTOM \
+  timeout 30 bash "$PREFLIGHT" > "$PF_OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  ok "CUSTOM without a base URL exits non-zero (rc=$rc)"
+else
+  not_ok "CUSTOM without a base URL must exit non-zero"
+fi
+assert_contains "preflight names the missing base URL" "$PF_OUT" "NIGHTMARE_LLM_BASE_URL"
+
+# 12e: a non-executable engine and a missing weights file each fail with the
+# exact variable named, so the caller can fix one thing at a time.
+PF_OUT="$TMP/preflight-bad-engine"
+"${PF_UNSET[@]}" NIGHTMARE_SD_BIN="$TMP/no-such-engine" \
+  timeout 30 bash "$PREFLIGHT" > "$PF_OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  ok "non-executable NIGHTMARE_SD_BIN exits non-zero (rc=$rc)"
+else
+  not_ok "non-executable NIGHTMARE_SD_BIN must exit non-zero"
+fi
+assert_contains "preflight names the bad engine var" "$PF_OUT" "NIGHTMARE_SD_BIN"
+
+PF_OUT="$TMP/preflight-bad-model"
+"${PF_UNSET[@]}" NIGHTMARE_GUI_MODEL="$TMP/no-such-model.safetensors" \
+  timeout 30 bash "$PREFLIGHT" > "$PF_OUT" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  ok "missing NIGHTMARE_GUI_MODEL exits non-zero (rc=$rc)"
+else
+  not_ok "missing NIGHTMARE_GUI_MODEL must exit non-zero"
+fi
+assert_contains "preflight names the bad model var" "$PF_OUT" "NIGHTMARE_GUI_MODEL"
+
+# ---- case 13: VERIFY_GUI_NO_CACHE=1 forces every build step to re-run ------
+
+CASE_LOGS="$TMP/logs-no-cache"
+CASE_OUT="$TMP/out-no-cache"
+mkdir -p "$CASE_LOGS"
+: > "$STUB_CALLS"
+VERIFY_GUI_NO_CACHE=1 \
+NIGHTMARE_MODELS="$TMP/no-such-models" \
+VERIFY_GUI_GRADLE="$STUB" \
+VERIFY_GUI_LOG_DIR="$CASE_LOGS" \
+timeout 30 bash "$SCRIPT" > "$CASE_OUT" 2>&1
+rc=$?
+
+assert_eq "VERIFY_GUI_NO_CACHE=1 run exits 0" 0 "$rc"
+assert_contains "no-cache appends --no-build-cache" "$STUB_CALLS" "--no-build-cache"
+assert_contains "no-cache appends --rerun-tasks" "$STUB_CALLS" "--rerun-tasks"
+assert_contains "no-cache run still passes" "$CASE_OUT" "verify-gui: PASS"
+
+# ---- case 14: an injected bad GUI CLI fails at launch-config, then stops --
+
+CASE_LOGS="$TMP/logs-launch-config-fail"
+CASE_OUT="$TMP/out-launch-config-fail"
+mkdir -p "$CASE_LOGS"
+: > "$STUB_CALLS"
+"${PF_UNSET[@]}" NIGHTMARE_GUI_CLI="$TMP/no-such-cli" \
+  NIGHTMARE_MODELS="$TMP/no-such-models" \
+  VERIFY_GUI_GRADLE="$STUB" \
+  VERIFY_GUI_LOG_DIR="$CASE_LOGS" \
+  timeout 30 bash "$SCRIPT" > "$CASE_OUT" 2>&1
+rc=$?
+
+if [ "$rc" -ne 0 ]; then
+  ok "bad injected GUI CLI makes the script exit non-zero (rc=$rc)"
+else
+  not_ok "bad injected GUI CLI must make the script exit non-zero"
+fi
+assert_contains "failure is named as launch-config" "$CASE_OUT" "verify-gui: FAILED at launch-config"
+assert_contains "preflight detail is in its own log" "$CASE_LOGS/verify-gui-launch-config.log" "NIGHTMARE_GUI_CLI"
+assert_not_contains "fail fast: no build after launch-config failure" "$STUB_CALLS" " build"
+assert_not_contains "no pass summary after launch-config failure" "$CASE_OUT" "verify-gui: PASS"
 
 # ---- summary --------------------------------------------------------------
 
