@@ -9,6 +9,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import javax.swing.SwingUtilities
 
 /**
@@ -40,10 +41,25 @@ class ChatSession(
     private val startTurn: (Runnable) -> Unit = { runnable ->
         Thread(runnable, "gui-chat-turn").apply { isDaemon = true }.start()
     },
+    askTimeoutMillis: Long = AskGate.DEFAULT_TIMEOUT_MILLIS,
 ) {
     private val items = Collections.synchronizedList(mutableListOf<ChatItem>())
     private val listeners = mutableListOf<() -> Unit>()
     private val turnActive = AtomicBoolean(false)
+    private val turnLock = Any()
+    private val turnEpoch = AtomicLong(0)
+    private var turnCancel = AtomicBoolean(false)
+
+    /**
+     * The Ask handshake lives here, not in the copied agent core: [ask] and
+     * [answer] only edit the in-memory bubbles and the waiting future, so an
+     * Ask can never leak into the workflow JSON or the run snapshot.
+     */
+    private val gate = AskGate(
+        onAsk = { item -> postToUi { append(item) } },
+        onResolved = { id, option -> postToUi { resolveAsk(id, option) } },
+        timeoutMillis = askTimeoutMillis,
+    )
 
     /** The one run control the tool commands and the result panel both read. */
     private val runControl = object : WorkflowRunControl {
@@ -69,6 +85,25 @@ class ChatSession(
     /** True while a turn owns the single background thread. */
     val running: Boolean get() = turnActive.get()
 
+    /** True while a turn thread is blocked waiting for an Ask option. */
+    val awaitingAsk: Boolean get() = gate.awaiting
+
+    /** Raises a 结构化追问 on the calling (background turn) thread and returns the picked option. */
+    fun ask(question: String, options: List<String>): String = gate.ask(question, options)
+
+    /** Release one Ask with the exact id and show the picked option in its bubble. */
+    fun answer(id: Int, option: String): Boolean = gate.answer(id, option)
+
+    /**
+     * The cancellation primitive for ticket 12's single cancel/window-close
+     * entry: release every waiter with CANCEL and ask the live turn to stop at
+     * its next step. It never touches the CLI process — ADR-0009 stays in 12.
+     */
+    fun cancelPendingAsks(): Int {
+        turnCancel.set(true)
+        return gate.cancelAll()
+    }
+
     /** Immutable bubble list for the shell; reads never see a partial emit. */
     fun snapshot(): List<ChatItem> = synchronized(items) { items.toList() }
 
@@ -82,31 +117,63 @@ class ChatSession(
     fun runSnapshot(): RunSnapshot = runner.snapshot()
 
     /**
-     * Starts one turn. Returns false when a turn is already live — the shell
-     * disables 「发送」 and never queues a second request.
+     * Starts one turn. Returns false when a turn is already live and busy —
+     * the shell disables 「发送」 and never queues a second request. The one
+     * exception is an Ask wait: typing there first releases the waiter with
+     * CANCEL and then starts a NEW turn (map ticket 05).
      */
     fun send(text: String): Boolean {
-        if (!turnActive.compareAndSet(false, true)) return false
-        postToUi { append(ChatItem.User(text)) }
-        startTurn {
-            try {
-                agent.send(text, { item ->
-                    // Engine log lines stay on the run-log panel, never in a bubble.
-                    if (item !is ChatItem.Log) postToUi { append(item) }
-                }, { false })
-            } catch (t: Throwable) {
-                // A malformed tool reply must not kill the turn thread silently.
-                postToUi { append(ChatItem.Error(t.message ?: t.javaClass.simpleName)) }
-            } finally {
-                turnActive.set(false)
-                postToUi { notifyChanged() }
+        synchronized(turnLock) {
+            val busy = turnActive.get()
+            if (busy && !gate.awaiting) return false
+            if (busy) {
+                gate.cancelAll() // CANCEL handshake before the new sentence
+                turnCancel.set(true)
+            } else {
+                turnActive.set(true)
             }
+            gate.beginTurn()
+            val epoch = turnEpoch.incrementAndGet()
+            val cancel = AtomicBoolean(false)
+            turnCancel = cancel
+            postToUi { append(ChatItem.User(text)) }
+            startTurn { runTurn(text, epoch, cancel) }
+            return true
         }
-        return true
+    }
+
+    private fun runTurn(text: String, epoch: Long, cancel: AtomicBoolean) {
+        try {
+            agent.send(text, { item ->
+                // Engine log lines stay on the run-log panel, never in a bubble.
+                if (item !is ChatItem.Log) postToUi { append(item) }
+            }, { cancel.get() || epoch != turnEpoch.get() })
+        } catch (t: Throwable) {
+            // A malformed tool reply must not kill the turn thread silently.
+            postToUi { append(ChatItem.Error(t.message ?: t.javaClass.simpleName)) }
+        } finally {
+            // A superseded turn must not clear the newer turn's send gate.
+            synchronized(turnLock) {
+                if (epoch == turnEpoch.get()) {
+                    turnActive.set(false)
+                    turnCancel.set(false)
+                }
+            }
+            postToUi { notifyChanged() }
+        }
     }
 
     private fun append(item: ChatItem) {
         synchronized(items) { items += item }
+        notifyChanged()
+    }
+
+    /** Fill only the matching Ask bubble; its four fields never leave memory. */
+    private fun resolveAsk(id: Int, option: String) {
+        synchronized(items) {
+            val index = items.indexOfFirst { it is ChatItem.Ask && it.id == id }
+            if (index >= 0) items[index] = (items[index] as ChatItem.Ask).copy(answer = option)
+        }
         notifyChanged()
     }
 
