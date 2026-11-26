@@ -59,7 +59,9 @@ object DesktopToolCommands {
 
                 "set_parameter" -> function(
                     name,
-                    "给已有节点设置一个参数，例如 prompt 节点的 prompt 或 sampler 节点的 seed；value 一律传字符串。",
+                    "给已有节点设置一个参数，例如 prompt 节点的 prompt 或 sampler 节点的 seed；value 一律传字符串。" +
+                        "调度器 scheduler 必须传 CLI 值（discrete、karras 等），不要传 normal；" +
+                        "采样器 sampler 传引擎名（如 euler、dpm++2m），不要传显示名。",
                     JSONObject()
                         .put("nodeId", JSONObject().put("type", "string").put("description", "已有节点的 id。"))
                         .put("key", JSONObject().put("type", "string").put("description", "参数名，例如 prompt、negative、seed、steps。"))

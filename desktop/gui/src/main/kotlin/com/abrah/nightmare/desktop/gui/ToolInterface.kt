@@ -105,7 +105,19 @@ class ToolInterface(
             runControl.runSnapshot().status == RunStatus.RUNNING ->
                 ToolResult.Rejected("已有运行在进行中")
 
-            runControl.triggerRun() -> ToolResult.Ok("已触发运行")
+            runControl.triggerRun() -> {
+                // triggerRun() blocks until the CLI child exits, so this is the
+                // terminal 运行态 the result panel renders — a failure or a
+                // cancel must not be reported to the model as a generated image.
+                val final = runControl.runSnapshot()
+                when (final.status) {
+                    RunStatus.SUCCESS -> ToolResult.Ok("已触发运行并成功出图")
+                    RunStatus.FAILURE, RunStatus.CANCELLED ->
+                        ToolResult.Rejected("运行失败：${final.error ?: final.firstReason ?: final.status}")
+
+                    else -> ToolResult.Rejected("运行失败：${final.status}")
+                }
+            }
 
             else -> ToolResult.Rejected("无法触发运行（运行可能已在进行中）")
         }

@@ -57,6 +57,11 @@ class DesktopToolCommandsTest {
             addProps.getJSONObject("id").getString("description").contains("不可重复"),
         )
 
+        val setDescription = byName.getValue("set_parameter").getJSONObject("function").getString("description")
+        assertTrue("scheduler documents a CLI value", setDescription.contains("discrete"))
+        assertTrue("scheduler warns against normal", setDescription.contains("normal"))
+        assertTrue("sampler documents an engine name", setDescription.contains("euler"))
+
         val setProps = byName.getValue("set_parameter")
             .getJSONObject("function").getJSONObject("parameters").getJSONObject("properties")
         assertEquals("string", setProps.getJSONObject("value").getString("type"))

@@ -22,6 +22,14 @@ import org.junit.Test
 class ChatSessionTest {
 
     @Test
+    fun `the system prompt names the CLI scheduler and sampler vocabularies`() {
+        val prompt = ChatSession.SYSTEM_PROMPT
+        assertTrue("scheduler must use CLI values", prompt.contains("discrete"))
+        assertTrue("normal is called out as invalid", prompt.contains("normal"))
+        assertTrue("sampler must use engine names", prompt.contains("euler"))
+    }
+
+    @Test
     fun `one sentence drives five tool commands a fake CLI render and a Picture bubble`() {
         assumePosix()
         val (config, png) = fakeCliPng("chat-session-test", "chat-result.png", captureArgv = true)
