@@ -2,7 +2,8 @@
 # Phase 2 GUI acceptance in one bounded command (ADR-0011).
 #
 # Steps, in order: :gui:classes -> full build (all JVM tests) -> the fake CLI
-# runner end-to-end tests -> workflow persistence -> optional real SD1.5 smoke
+# runner end-to-end tests -> chat turns (fake ChatModel + fake CLI, including
+# Ask answer/cancel) -> workflow persistence -> optional real SD1.5 smoke
 # -> optional GUI launch. Every step has a hard timeout and an appended log in
 # VERIFY_GUI_LOG_DIR (default /tmp); any non-zero exit stops the run and leaves
 # all logs in place. Missing weights skip the real smoke without failing.
@@ -10,6 +11,7 @@
 # Overrides (mostly for CI/test harnesses; see desktop/README.md):
 #   VERIFY_GUI_GRADLE      gradle launcher (default ./gradlew)
 #   VERIFY_GUI_LOG_DIR     log directory (default /tmp)
+#   VERIFY_GUI_CHAT_TURN_TIMEOUT  seconds for chat-turn (default 600)
 #   VERIFY_GUI_SMOKE_TIMEOUT  seconds for the real smoke (default 1800)
 #   VERIFY_GUI_LAUNCH=1    also launch the GUI once (uses DISPLAY or xvfb-run)
 #   NIGHTMARE_MODELS       model cache root (default ~/.cache/nightmare-desktop/models)
@@ -27,6 +29,7 @@ fi
 
 GRADLE="${VERIFY_GUI_GRADLE:-./gradlew}"
 LOG_DIR="${VERIFY_GUI_LOG_DIR:-/tmp}"
+CHAT_TURN_TIMEOUT="${VERIFY_GUI_CHAT_TURN_TIMEOUT:-600}"
 SMOKE_TIMEOUT="${VERIFY_GUI_SMOKE_TIMEOUT:-1800}"
 MODELS_ROOT="${NIGHTMARE_MODELS:-$HOME/.cache/nightmare-desktop/models}"
 MODEL_FILE="$MODELS_ROOT/sd15/v1-5-pruned-emaonly.safetensors"
@@ -81,13 +84,32 @@ run_step fake-runner 600 "$LOG_DIR/verify-gui-fake-runner.log" \
   --tests com.abrah.nightmare.desktop.gui.DefaultModeStateTest \
   --tests com.abrah.nightmare.desktop.gui.AdvancedModeStateTest || fail_step
 
-# 4. Workflow save/load/version-compat seam, also part of `build` above but
+# 4. 对话回合 full path: a scripted fake ChatModel drives the real agent loop
+#    through the five ToolInterface commands into a POSIX fake CLI, then the
+#    existing listener/snapshot path exposes the PNG. AskSessionTest covers
+#    answer(id, option) continuing the same turn and CANCEL on cancel/close;
+#    TurnLifecycleTest covers the single cancel/window-close entry point. All
+#    filters are named so an empty match fails the step; no key or network is
+#    needed and no real provider is contacted.
+run_step chat-turn "$CHAT_TURN_TIMEOUT" "$LOG_DIR/verify-gui-chat-turn.log" \
+  "$GRADLE" --no-daemon :gui:test \
+  --tests com.abrah.nightmare.desktop.gui.fake.FakeChatModelWorkflowTest \
+  --tests com.abrah.nightmare.desktop.gui.ChatSessionTest \
+  --tests com.abrah.nightmare.desktop.gui.AskSessionTest \
+  --tests com.abrah.nightmare.desktop.gui.TurnLifecycleTest || fail_step
+
+# 5. Workflow save/load/version-compat seam, also part of `build` above but
 #    kept visible here as a separate, bounded assertion.
 run_step persistence 600 "$LOG_DIR/verify-gui-persistence.log" \
   "$GRADLE" --no-daemon :core:test \
   --tests com.abrah.nightmare.desktop.graph.WorkflowPersistenceTest || fail_step
 
-# 5. Real-weight smoke is optional: no cache means a documented skip, not a
+# A real LLM provider smoke stays a manual, optional check: it needs
+# NIGHTMARE_LLM_* credentials and network, while every automated chat-turn
+# assertion above uses a fake ChatModel and a fake CLI. No key is required
+# here and a missing provider/key/network never blocks acceptance.
+#
+# 6. Real-weight smoke is optional: no cache means a documented skip, not a
 #    failure. A missing engine binary is skipped for the same reason.
 SMOKE_LOG="$LOG_DIR/verify-gui-real-smoke.log"
 if [ -f "$MODEL_FILE" ]; then
@@ -102,7 +124,7 @@ else
   printf 'verify-gui: real-smoke 已跳过（无权重缓存）: %s\n' "$MODEL_FILE" | tee -a "$SMOKE_LOG"
 fi
 
-# 6. Opt-in graphical sanity check. Use the display that is already there;
+# 7. Opt-in graphical sanity check. Use the display that is already there;
 #    otherwise wrap with xvfb-run when installed; otherwise say so and carry
 #    on. `:gui:run` is a window that stays open, so the timeout is expected.
 if [ "${VERIFY_GUI_LAUNCH:-0}" = "1" ]; then
