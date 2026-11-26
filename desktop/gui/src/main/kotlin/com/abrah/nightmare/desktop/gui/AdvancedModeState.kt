@@ -288,6 +288,12 @@ class AdvancedModeState(
     /** Cancel the run through its owning runner, not by killing a bare Process. */
     fun cancelRun(): Boolean = WorkflowRunner.cancelActiveProcess(runHandle())
 
+    /** Explicit save of the one shared workflow; the shell shows the feedback. */
+    fun saveWorkflow(path: String): PersistenceFeedback = session.saveTo(path)
+
+    /** Explicit load: Ok replaces the shared workflow, Err only reports the error. */
+    fun loadWorkflow(path: String): PersistenceFeedback = session.loadFrom(path)
+
     // ---- bridge between the graph's stored position and the canvas map -----
 
     private fun newCanvasState(graph: GraphWorkflow): CanvasState = CanvasState(
@@ -359,6 +365,7 @@ class AdvancedModeState(
             "${node.params["sampler"].orEmpty()} · ${node.params["steps"].orEmpty()} steps"
 
         DesktopNodeTypes.OUTPUT -> "save=${node.params["save"].orEmpty()}"
+        DesktopNodeTypes.IMAGE_INPUT -> "强度 ${node.params["strength"].orEmpty()}"
         else -> node.params.values.take(2).joinToString(" · ")
     }
 
