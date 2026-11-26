@@ -28,6 +28,16 @@ tasks.test {
     testLogging { events("passed", "failed", "skipped") }
 }
 
+// One-command provider self-check. Reuses the GUI module so the tool reads the
+// same ProviderProbe / ChatProviderSettings.resolved() seam the chat shell uses.
+// With no NIGHTMARE_LLM_* config it prints SKIP and exits 0 without a network call.
+tasks.register<JavaExec>("providerDiagnostics") {
+    group = "application"
+    description = "Check NIGHTMARE_LLM_* config, provider connectivity and available chat models."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.abrah.nightmare.desktop.gui.ProviderDiagnosticsMainKt")
+}
+
 compose.desktop {
     application {
         mainClass = "com.abrah.nightmare.desktop.gui.MainKt"
