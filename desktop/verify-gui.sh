@@ -3,8 +3,10 @@
 #
 # Steps, in order: :gui:classes -> manual-launch preflight -> full build (all
 # JVM tests) -> the fake CLI runner end-to-end tests -> chat turns (fake
-# ChatModel + fake CLI, including Ask answer/cancel) -> workflow persistence
-# -> optional real SD1.5 smoke -> optional GUI launch. Every step has a hard
+# ChatModel + fake CLI, including Ask answer/cancel) -> img2img (runner
+# --init-img/--strength projection + one-sentence chat turn, both with a fake
+# CLI) -> workflow persistence -> optional real SD1.5 smoke -> optional GUI
+# launch. Every step has a hard
 # timeout and an appended log in VERIFY_GUI_LOG_DIR (default /tmp); any
 # non-zero exit stops the run and leaves all logs in place. Missing weights
 # skip the real smoke without failing.
@@ -17,6 +19,7 @@
 #                          Gradle call, so a cache hit cannot fake a green run;
 #                          the default (0) leaves the command lines unchanged
 #   VERIFY_GUI_CHAT_TURN_TIMEOUT  seconds for chat-turn (default 600)
+#   VERIFY_GUI_IMG2IMG_TIMEOUT  seconds for img2img (default 600)
 #   VERIFY_GUI_SMOKE_TIMEOUT  seconds for the real smoke (default 1800)
 #   VERIFY_GUI_LAUNCH=1    also launch the GUI once (uses DISPLAY or xvfb-run)
 #   NIGHTMARE_MODELS       model cache root (default ~/.cache/nightmare-desktop/models)
@@ -40,6 +43,7 @@ fi
 GRADLE="${VERIFY_GUI_GRADLE:-./gradlew}"
 LOG_DIR="${VERIFY_GUI_LOG_DIR:-/tmp}"
 CHAT_TURN_TIMEOUT="${VERIFY_GUI_CHAT_TURN_TIMEOUT:-600}"
+IMG2IMG_TIMEOUT="${VERIFY_GUI_IMG2IMG_TIMEOUT:-600}"
 SMOKE_TIMEOUT="${VERIFY_GUI_SMOKE_TIMEOUT:-1800}"
 MODELS_ROOT="${NIGHTMARE_MODELS:-$HOME/.cache/nightmare-desktop/models}"
 MODEL_FILE="$MODELS_ROOT/sd15/v1-5-pruned-emaonly.safetensors"
@@ -121,6 +125,20 @@ run_step chat-turn "$CHAT_TURN_TIMEOUT" "$LOG_DIR/verify-gui-chat-turn.log" \
   --tests com.abrah.nightmare.desktop.gui.ChatSessionTest \
   --tests com.abrah.nightmare.desktop.gui.AskSessionTest \
   --tests com.abrah.nightmare.desktop.gui.TurnLifecycleTest || fail_step
+
+# 4a. Img2Img full path, split out of chat-turn so its own log names the fake
+#     CLI contract: WorkflowRunnerTest asserts an image-node workflow projects
+#     to `img2img` with --init-img/--strength (default 0.75), no --batch, and
+#     that the produced PNG reaches the result snapshot; ChatSessionTest
+#     asserts one sentence drives the five existing tools into a Picture
+#     bubble plus that snapshot; DesktopToolCommandsTest asserts the image
+#     path/strength/tool schema. The txt2img path remains covered above and
+#     inside these same classes. No key, network or real weights are needed.
+run_step img2img "$IMG2IMG_TIMEOUT" "$LOG_DIR/verify-gui-img2img.log" \
+  "$GRADLE" --no-daemon "${CACHE_FLAGS[@]}" :gui:test \
+  --tests com.abrah.nightmare.desktop.gui.WorkflowRunnerTest \
+  --tests com.abrah.nightmare.desktop.gui.ChatSessionTest \
+  --tests com.abrah.nightmare.desktop.gui.DesktopToolCommandsTest || fail_step
 
 # 5. Workflow save/load/version-compat seam, also part of `build` above but
 #    kept visible here as a separate, bounded assertion.

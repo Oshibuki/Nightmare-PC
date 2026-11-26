@@ -64,9 +64,19 @@ What it checks, in order:
 | Full build | `build` (all JVM tests) | `verify-gui-build.log` | 900 s |
 | Fake CLI runner E2E | `:gui:test` with `WorkflowRunnerTest`, `ToolInterfaceTest`, `DefaultModeStateTest`, `AdvancedModeStateTest` | `verify-gui-fake-runner.log` | 600 s |
 | Chat turn (fake ChatModel + fake CLI) | `:gui:test` with `FakeChatModelWorkflowTest`, `ChatSessionTest`, `AskSessionTest`, `TurnLifecycleTest` | `verify-gui-chat-turn.log` | 600 s |
+| Img2Img (fake CLI + fake ChatModel) | `:gui:test` with `WorkflowRunnerTest`, `ChatSessionTest`, `DesktopToolCommandsTest` | `verify-gui-img2img.log` | 600 s |
 | Workflow persistence | `:core:test` with `WorkflowPersistenceTest` | `verify-gui-persistence.log` | 600 s |
 | Real SD1.5 smoke | `:cli:test` with `Img2ImgRealE2ETest` | `verify-gui-real-smoke.log` | 1800 s |
 | GUI launch (opt-in) | `:gui:run` | `verify-gui-launch.log` | 60 s |
+
+The `img2img` step runs after `chat-turn` and before `persistence`, with its own
+log and hard timeout. It names the tests that assert the fake-path contract: an
+image-node workflow projects to the `img2img` CLI subcommand with
+`--init-img`/`--strength` (default 0.75, no `--batch`), the fake CLI PNG reaches
+the result snapshot, and one chat sentence builds that workflow through the
+existing tool commands and produces a Picture bubble. Those assertions read
+arguments by name rather than comparing whole command strings (JVM `org.json`
+key order is unstable). No key, network or real weights are needed here.
 
 The `--tests` filters are assertions too: Gradle fails a filter that matches no
 test, and any failed test gives a non-zero exit. Logs live in
@@ -79,6 +89,7 @@ test, and any failed test gives a non-zero exit. Logs live in
 | `VERIFY_GUI_PREFLIGHT` | preflight launcher, default `./preflight-gui-launch.sh`; test seam only |
 | `VERIFY_GUI_NO_CACHE` | set to `1` to append `--no-build-cache --rerun-tasks` to every Gradle call; default `0` leaves them unchanged |
 | `VERIFY_GUI_CHAT_TURN_TIMEOUT` | chat-turn seconds, default 600 |
+| `VERIFY_GUI_IMG2IMG_TIMEOUT` | img2img seconds, default 600 |
 | `VERIFY_GUI_SMOKE_TIMEOUT` | real-smoke seconds, default 1800 |
 | `NIGHTMARE_MODELS` | model cache root, default `~/.cache/nightmare-desktop/models` |
 | `NIGHTMARE_SD_BIN` | explicit engine binary; when set it wins verbatim (no Vulkan wrapper). Otherwise real-smoke picks the engine as described below |
@@ -194,8 +205,9 @@ events. Only PNGs still present after a clean exit reach the results; failure,
 cancellation and timeout settle into a readable error with the exit code and
 first reason in the shell and full detail in the log. `verify-gui.sh` (see
 [Phase 2 acceptance](#phase-2-acceptance-one-command-linux)) is the one-command
-acceptance script covering GUI compile, full build/test, fake CLI E2E, workflow
-persistence and an optional real SD1.5 smoke, each under a hard timeout.
+acceptance script covering GUI compile, full build/test, fake CLI E2E, chat
+turns, img2img, workflow persistence and an optional real SD1.5 smoke, each
+under a hard timeout with its own log.
 
 With `JAVA_HOME` exported as above and the working directory `desktop/`:
 
