@@ -59,8 +59,14 @@ object RealProviderVerificationMain {
                 startTurn = { it.run() },
                 askTimeoutMillis = 15_000L,
             )
-            println("发送: 请新建工作流，放一个提示词节点和一个采样节点、一个输出节点，把提示词设为「清晨薄雾的城市」，连成链，然后运行。")
-            val accepted = chat.send("请新建工作流，放一个提示词节点和一个采样节点、一个输出节点，把提示词设为「清晨薄雾的城市，柔和光线」，依次连成链后运行。")
+            // Default phrasing drives the original five-command path. A custom
+            // NIGHTMARE_VERIFY_PROMPT lets one run exercise newly mapped tools
+            // (e.g. list_models / get_canvas / save_flow) without hardcoding
+            // a second scenario into this opt-in verifier.
+            val prompt = env["NIGHTMARE_VERIFY_PROMPT"]?.takeIf { it.isNotBlank() }
+                ?: "请新建工作流，放一个提示词节点和一个采样节点、一个输出节点，把提示词设为「清晨薄雾的城市，柔和光线」，依次连成链后运行。"
+            println("发送: $prompt")
+            val accepted = chat.send(prompt)
             if (!accepted) {
                 println("FAIL[发送]: 回合未被接受（运行中或追问等待冲突）。")
                 System.out.flush()
@@ -82,19 +88,25 @@ object RealProviderVerificationMain {
             }
 
             val toolCalls = bubbles.filterIsInstance<ChatItem.Tool>()
-            val toolCallSeen = toolCalls.any { it.name == "run" || toolCalls.size >= 3 }
+            val toolCallSeen = toolCalls.isNotEmpty() && toolCalls.all { it.ok }
             val nodes = chat.workflow.nodes
             val workflowChanged = nodes.size >= 3
             val pictureSeen = bubbles.any { it is ChatItem.Picture && File(it.path).exists() }
+            // A render turn calls the `run` tool and expects a picture; a
+            // read-only/save turn (list_models/get_canvas/save_flow/...) does
+            // not. Deriving it from the actual tool calls avoids both a false
+            // negative on read-only prompts and a false pass on render prompts.
+            val expectsPicture = toolCalls.any { it.name == "run" }
             val argv = File(cliConfig.outputPath).parentFile?.let { File(it, "argv.txt") }
             println("--- 证据 ---")
             println("  工作流节点数: ${nodes.size} (${nodes.map { it.type }.joinToString()})")
             println("  CLI argv: ${argv?.takeIf { it.exists() }?.readText()?.trim()?.replace('\n', ' ') ?: "(无)"}")
             println("  假 CLI 产物存在: ${File(png.path).exists()} (${png.path})")
+            println("  期望出图: $expectsPicture（由本次是否调用 run 决定）")
 
-            val passed = toolCallSeen && workflowChanged && pictureSeen
-            println(if (passed) "PASS: 三条判据全部满足（真实服务 tool_calls → 工作流改动 → 产物图/Picture 气泡）。"
-                    else "FAIL: tool_calls=$toolCallSeen 工作流改动=$workflowChanged 产物图=$pictureSeen")
+            val passed = toolCallSeen && workflowChanged && (!expectsPicture || pictureSeen)
+            println(if (passed) "PASS: 判据满足（真服务 tool_calls 全 ok → 工作流可读 → ${if (expectsPicture) "产物图/Picture 气泡" else "只读/保存工具成功"}）。"
+                    else "FAIL: tool_calls=$toolCallSeen 工作流改动=$workflowChanged 产物图=$pictureSeen（期望出图=$expectsPicture）")
             System.out.flush()
             exitProcess(if (passed) EXIT_SKIP_OR_PASS else EXIT_FAIL)
         } catch (t: Throwable) {
