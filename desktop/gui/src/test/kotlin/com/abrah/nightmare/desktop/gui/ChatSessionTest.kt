@@ -1,17 +1,23 @@
 package com.abrah.nightmare.desktop.gui
 
 import com.abrah.nightmare.agent.ChatItem
+import com.abrah.nightmare.agent.ChatModel
 import com.abrah.nightmare.desktop.graph.DesktopNodeTypes
 import com.abrah.nightmare.desktop.graph.Workflow
-import com.abrah.nightmare.desktop.gui.fake.assumePosix
-import com.abrah.nightmare.desktop.gui.fake.fakeCliPng
 import com.abrah.nightmare.desktop.gui.fake.ScriptChatModel
+import com.abrah.nightmare.desktop.gui.fake.assumePosix
+import com.abrah.nightmare.desktop.gui.fake.awaitStatePolling
+import com.abrah.nightmare.desktop.gui.fake.fakeCliPng
 import com.abrah.nightmare.desktop.gui.fake.toolCall
 import com.abrah.nightmare.desktop.gui.fake.words
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Collections
 
 /**
  * 对话回合 state-layer tests: one sentence in, bubbles + the shared workflow +
@@ -167,8 +173,171 @@ class ChatSessionTest {
         assertTrue(chat.snapshot().contains(ChatItem.User("third")))
     }
 
+    @Test
+    fun `the replay tooltip previews only the last sent sentence`() {
+        val chat = ChatSession(
+            model = ScriptChatModel(words("ok")),
+            postToUi = { it.run() },
+            startTurn = { it.run() },
+        )
+        assertNull("there is no sentence to replay before the first turn", chat.replayTooltip())
+        assertFalse("nothing to replay", chat.replayLast())
+
+        assertTrue(chat.send("x".repeat(80)))
+        assertEquals("x".repeat(48) + "…", chat.replayTooltip())
+        assertTrue(chat.send("short one"))
+        assertEquals("short one", chat.replayTooltip())
+    }
+
+    @Test
+    fun `replay resends the last sentence as a new turn with a clean agent context`() {
+        val model = ScriptChatModel(
+            words("first answer"),
+            toolCall("r1", "add_node", JSONObjectOf("id" to "note", "type" to DesktopNodeTypes.PROMPT)),
+            words("replay answer"),
+        )
+        val chat = ChatSession(
+            model = model,
+            postToUi = { it.run() },
+            startTurn = { it.run() },
+        )
+
+        assertTrue(chat.send("第一句"))
+        assertEquals("第一句", chat.lastUserText())
+        assertTrue(chat.replayLast())
+        assertFalse(chat.running)
+
+        val bubbles = chat.snapshot()
+        assertEquals(listOf("第一句", "第一句"), bubbles.filterIsInstance<ChatItem.User>().map { it.text })
+        assertEquals("first answer", bubbles.filterIsInstance<ChatItem.Assistant>().first().text)
+        assertEquals("replay answer", bubbles.filterIsInstance<ChatItem.Assistant>().last().text)
+
+        // The replay turn's first model call carries a fresh history: system +
+        // this one sentence, never the previous turn's assistant/tool messages.
+        assertEquals(3, model.seen.size)
+        val replayStart = model.seen[1]
+        assertEquals(2, replayStart.length())
+        assertEquals("system", replayStart.getJSONObject(0).getString("role"))
+        assertEquals(ChatSession.SYSTEM_PROMPT, replayStart.getJSONObject(0).getString("content"))
+        assertEquals("user", replayStart.getJSONObject(1).getString("role"))
+        assertEquals("第一句", replayStart.getJSONObject(1).getString("content"))
+    }
+
+    @Test(timeout = 20_000)
+    fun `replaying the same sentence twice rebuilds the same workflow and picture`() {
+        assumePosix()
+        val (config, png) = fakeCliPng("replay-test", "replay-result.png", captureArgv = true)
+        val session = WorkflowSession(Workflow())
+        val runner = WorkflowRunner(config)
+        val workflowAtTurnStart = Collections.synchronizedList(mutableListOf<List<String>>())
+
+        // The replay turns deliberately omit new_workflow: if replay did not
+        // reset the shared workflow, these add_node calls would be rejected.
+        val turn = listOf(
+            toolCall("b1", "add_node", JSONObjectOf("id" to "prompt", "type" to DesktopNodeTypes.PROMPT)),
+            toolCall("b2", "add_node", JSONObjectOf("id" to "sampler", "type" to DesktopNodeTypes.SD_SAMPLER)),
+            toolCall("b3", "add_node", JSONObjectOf("id" to "output", "type" to DesktopNodeTypes.OUTPUT)),
+            toolCall("b4", "set_parameter", JSONObjectOf("nodeId" to "prompt", "key" to "prompt", "value" to "same input")),
+            toolCall("b5", "connect", JSONObjectOf("fromNode" to "prompt", "toNode" to "sampler", "toPort" to "prompt")),
+            toolCall("b6", "connect", JSONObjectOf("fromNode" to "sampler", "toNode" to "output", "toPort" to "image")),
+            toolCall("b7", "run", "{}"),
+            words("done"),
+        )
+        val script = ScriptChatModel(*(turn + turn + turn).toTypedArray())
+        var atTurnStart = true
+        val model = object : ChatModel {
+            override fun complete(messages: JSONArray, tools: JSONArray): JSONObject {
+                if (atTurnStart) {
+                    workflowAtTurnStart += session.workflow.nodes.map { it.id }
+                    atTurnStart = false
+                }
+                val reply = script.complete(messages, tools)
+                if (!reply.has("tool_calls")) atTurnStart = true
+                return reply
+            }
+        }
+        val chat = ChatSession(
+            session = session,
+            runner = runner,
+            model = model,
+            postToUi = { it.run() },
+            startTurn = { it.run() },
+        )
+
+        assertTrue(chat.send("同一句"))
+        val firstWorkflow = session.workflow
+        assertTrue(chat.replayLast())
+        val secondWorkflow = session.workflow
+        assertEquals(firstWorkflow, secondWorkflow)
+        assertTrue(chat.replayLast())
+        assertEquals(firstWorkflow, session.workflow)
+
+        assertEquals(listOf(emptyList<String>(), emptyList(), emptyList()), workflowAtTurnStart.toList())
+        val bubbles = chat.snapshot()
+        assertTrue("every replay tool was accepted", bubbles.filterIsInstance<ChatItem.Tool>().all { it.ok })
+        assertEquals(3, bubbles.count { it is ChatItem.User })
+        assertEquals(3, bubbles.count { it is ChatItem.Picture && it.path == png.path })
+        assertEquals(RunStatus.SUCCESS, runner.snapshot().status)
+        assertEquals("same input", session.workflow.nodes.first { it.type == DesktopNodeTypes.PROMPT }.params["prompt"])
+    }
+
+    @Test
+    fun `a live turn refuses replay without resetting the workflow or adding a bubble`() {
+        val queued = mutableListOf<Runnable>()
+        val session = WorkflowSession(Workflow())
+        val chat = ChatSession(
+            session = session,
+            model = ScriptChatModel(words("first ok"), words("replay ok")),
+            postToUi = { it.run() },
+            startTurn = { queued += it },
+        )
+
+        assertTrue(chat.send("第一句"))
+        val before = session.workflow
+        assertFalse("a busy turn refuses replay", chat.replayLast())
+        assertEquals(before, session.workflow)
+        assertEquals(1, queued.size)
+        assertEquals(1, chat.snapshot().count { it is ChatItem.User })
+
+        queued.removeAt(0).run()
+        assertFalse(chat.running)
+        assertTrue("a finished turn accepts replay", chat.replayLast())
+        assertEquals(1, queued.size)
+        queued.removeAt(0).run()
+        assertEquals(listOf("第一句", "第一句"), chat.snapshot().filterIsInstance<ChatItem.User>().map { it.text })
+    }
+
+    @Test(timeout = 20_000)
+    fun `replay during an Ask wait releases it with CANCEL and starts a new turn`() {
+        val seenAnswers = Collections.synchronizedList(mutableListOf<String>())
+        var calls = 0
+        lateinit var chat: ChatSession
+        val model = object : ChatModel {
+            override fun complete(messages: JSONArray, tools: JSONArray): JSONObject = when (calls++) {
+                0 -> {
+                    seenAnswers += chat.ask("等一下？", listOf("继续", "取消"))
+                    words("first done")
+                }
+                else -> words("after replay")
+            }
+        }
+        chat = ChatSession(
+            model = model,
+            postToUi = { it.run() },
+            askTimeoutMillis = 5_000L,
+        )
+
+        assertTrue(chat.send("第一句"))
+        awaitStatePolling(chat) { chat.awaitingAsk }
+        assertTrue("an Ask wait is not a busy turn for replay", chat.replayLast())
+        assertEquals(AskGate.CANCEL, chat.snapshot().filterIsInstance<ChatItem.Ask>().single().answer)
+        assertEquals(listOf(AskGate.CANCEL), seenAnswers.toList())
+        assertEquals(listOf("第一句", "第一句"), chat.snapshot().filterIsInstance<ChatItem.User>().map { it.text })
+        awaitStatePolling(chat) { !chat.running }
+    }
+
     // ---- harness: POSIX fake CLI + bounded waits come from ChatTestHarness --
 
     private fun JSONObjectOf(vararg pairs: Pair<String, String>): String =
-        org.json.JSONObject().apply { pairs.forEach { (key, value) -> put(key, value) } }.toString()
+        JSONObject().apply { pairs.forEach { (key, value) -> put(key, value) } }.toString()
 }

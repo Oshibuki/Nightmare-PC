@@ -25,7 +25,7 @@ class ChatSession(
     private val runner: WorkflowRunner = WorkflowRunner(),
     // Production now goes through the copied :core LlmClient with env+memory settings.
     // Tests keep injecting their own ChatModel at this same seam.
-    model: ChatModel = ProviderChatModel(ChatProviderStore.settings),
+    private val model: ChatModel = ProviderChatModel(ChatProviderStore.settings),
     private val postToUi: (Runnable) -> Unit = { SwingUtilities.invokeLater(it) },
     private val startTurn: (Runnable) -> Unit = { runnable ->
         Thread(runnable, "gui-chat-turn").apply { isDaemon = true }.start()
@@ -58,12 +58,19 @@ class ChatSession(
         override fun runSnapshot(): RunSnapshot = runner.snapshot()
     }
 
-    /** One agent instance, so its history keeps the conversation in memory. */
-    private val agent = Agent(
-        model,
-        DesktopToolBox(ToolInterface(session, runControl), runControl),
-        SYSTEM_PROMPT,
-    )
+    /** Stateless command surface, shared by the tools and the replay reset. */
+    private val tools = ToolInterface(session, runControl)
+
+    /**
+     * One agent keeps the whole 对话回合 chain in memory; [replayLast]
+     * deliberately replaces it with a fresh history for a reproducible experiment.
+     * Visible to this module so ticket 07 can change the prompt/tool box in one
+     * place without introducing a second construction path.
+     */
+    internal fun newAgent(model: ChatModel): Agent =
+        Agent(model, DesktopToolBox(tools, runControl), SYSTEM_PROMPT)
+
+    private var agent: Agent = newAgent(model)
 
     init {
         session.addChangeListener { postToUi { notifyChanged() } }
@@ -125,6 +132,34 @@ class ChatSession(
 
     /** Immutable bubble list for the shell; reads never see a partial emit. */
     fun snapshot(): List<ChatItem> = synchronized(items) { items.toList() }
+
+    /** The last sentence the person actually sent; an unsubmitted draft is invisible here. */
+    fun lastUserText(): String? = synchronized(items) {
+        items.filterIsInstance<ChatItem.User>().lastOrNull()?.text
+    }
+
+    /** Truncated preview for the single replay button's tooltip. */
+    fun replayTooltip(maxChars: Int = 48): String? = lastUserText()?.let { text ->
+        if (text.length <= maxChars) text else "${text.take(maxChars)}…"
+    }
+
+    /**
+     * 重发上一句: the one reproducible-experiment entry. It sends the last
+     * already-sent sentence through [send] — the single send path, so the busy
+     * gate and the Ask-CANCEL bypass stay identical. Before that turn starts it
+     * resets the one workflow through the existing 新建工作流 command and swaps
+     * in a fresh Agent (clean history) over the SAME injected [model]: provider
+     * settings are still read by `settings.resolved()` on every completion.
+     * Old bubbles and generated pictures are never cleared.
+     */
+    fun replayLast(): Boolean = synchronized(turnLock) {
+        val text = lastUserText() ?: return@synchronized false
+        // Same gate as send(): a refused replay must not reset the workflow.
+        if (turnActive.get() && !gate.awaiting) return@synchronized false
+        tools.dispatch(ToolCommand.NewWorkflow)
+        agent = newAgent(model)
+        send(text)
+    }
 
     /** Same listener/snapshot shape as the other two mode states. */
     fun addChangeListener(listener: () -> Unit): () -> Unit {

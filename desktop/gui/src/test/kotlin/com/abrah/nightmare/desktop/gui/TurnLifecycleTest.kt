@@ -251,6 +251,7 @@ class TurnLifecycleTest {
         awaitStatePolling(chat) { !chat.running }
         val error = chat.snapshot().filterIsInstance<ChatItem.Error>().single()
         assertTrue("provider is down" in error.text)
+        val workflowBeforeRetry = chat.workflow
 
         assertTrue("a finished failed turn frees the send gate", chat.send("第二次重试"))
         awaitStatePolling(chat) { !chat.running && ChatItem.Assistant("retry ok") in chat.snapshot() }
@@ -260,6 +261,7 @@ class TurnLifecycleTest {
         assertTrue("the old error bubble is not wiped", error in bubbles)
         assertTrue(ChatItem.Assistant("retry ok") in bubbles)
         assertTrue("the in-memory agent history carried the first message", seen.last().toString().contains("第一次"))
+        assertEquals("the send retry path never resets the workflow", workflowBeforeRetry, chat.workflow)
         assertTrue("a fresh session (app restart) starts with no bubbles", ChatSession(postToUi = { it.run() }).snapshot().isEmpty())
     }
 
@@ -279,6 +281,7 @@ class TurnLifecycleTest {
         chat.cancelTurn()
         cli.release()
         awaitStatePolling(chat) { !chat.running }
+        val workflowBeforeRetry = chat.workflow
 
         assertTrue("retry starts a new turn", chat.send("重试"))
         awaitStatePolling(chat) { !chat.running && ChatItem.Assistant("retry ok") in chat.snapshot() }
@@ -286,6 +289,7 @@ class TurnLifecycleTest {
         assertEquals(listOf("第一次", "重试"), bubbles.filterIsInstance<ChatItem.User>().map { it.text })
         assertTrue("已取消 bubble survives retry", ChatItem.Assistant("已取消") in bubbles)
         assertTrue("the picture from the first turn survives retry", ChatItem.Picture(cli.png.path) in bubbles)
+        assertEquals("the send retry path never resets the workflow", workflowBeforeRetry, chat.workflow)
     }
 
     // ---- harness: POSIX fake CLI + bounded waits come from ChatTestHarness --
