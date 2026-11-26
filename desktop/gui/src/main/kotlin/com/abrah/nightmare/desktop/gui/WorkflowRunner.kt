@@ -1,5 +1,6 @@
 package com.abrah.nightmare.desktop.gui
 
+import com.abrah.nightmare.desktop.core.SamplerWire
 import com.abrah.nightmare.desktop.graph.DesktopNodeTypes
 import com.abrah.nightmare.desktop.graph.Workflow
 import java.io.File
@@ -207,8 +208,8 @@ class WorkflowRunner(private val config: RunConfig = RunConfig()) {
             ?.let { args += listOf("--negative-prompt", it) }
         samplerNode?.params?.let { params ->
             listOf(
-                "--sampler" to params["sampler"],
-                "--scheduler" to params["scheduler"],
+                "--sampler" to params["sampler"]?.let(::engineSampler),
+                "--scheduler" to params["scheduler"]?.let(::engineScheduler),
                 "--steps" to params["steps"],
                 "--cfg-scale" to params["cfgScale"],
                 "--seed" to params["seed"],
@@ -221,6 +222,29 @@ class WorkflowRunner(private val config: RunConfig = RunConfig()) {
         args += listOf("--out", config.outputPath)
         args += listOf("--batch", config.batch.toString())
         return args
+    }
+
+    /**
+     * Only the CLI projection is normalized: the persisted/workflow value and
+     * `paramsFor()` metadata keep exactly what the user or a tool wrote. An
+     * unknown value is passed through so the CLI can report the bad flag; the
+     * GUI must not silently swallow it.
+     */
+    private fun engineSampler(value: String): String =
+        engineValue(value, SamplerWire.SAMPLERS, SamplerWire::samplerLabel)
+
+    private fun engineScheduler(value: String): String {
+        // The engine aliases "normal" to "discrete", but this CLI's argv
+        // allowlist rejects the alias, so it needs the canonical word.
+        if (value.equals("normal", ignoreCase = true)) return SamplerWire.DEFAULT_SCHEDULER
+        return engineValue(value, SamplerWire.SCHEDULERS, SamplerWire::schedulerLabel)
+    }
+
+    private fun engineValue(value: String, legal: List<String>, label: (String) -> String): String {
+        if (value in legal) return value
+        val trimmed = value.trim()
+        if (trimmed in legal) return trimmed
+        return legal.firstOrNull { label(it).equals(trimmed, ignoreCase = true) } ?: value
     }
 
     /** The workflow settings that produced this run, attached to each result. */

@@ -154,21 +154,70 @@ class ToolInterfaceTest {
         assertEquals(1, ready.triggerCalls)
     }
 
+    @Test
+    fun `a failed run is rejected with the CLI reason instead of claiming an image`() {
+        val failed = StubRunControl(
+            statusAfter = RunStatus.FAILURE,
+            error = "退出码 2：option '--scheduler' must be one of [discrete, karras]",
+        )
+        val result = ToolInterface(WorkflowSession(), failed).dispatch(ToolCommand.Run)
+
+        assertTrue(result is ToolResult.Rejected)
+        val reason = (result as ToolResult.Rejected).reason
+        assertTrue("the failure reason must reach the caller: $reason", reason.contains("退出码 2"))
+        assertTrue(reason.startsWith("运行失败："))
+        assertEquals(1, failed.triggerCalls)
+    }
+
+    @Test
+    fun `a failure without an error line still reports the first readable reason`() {
+        val failed = StubRunControl(
+            statusAfter = RunStatus.FAILURE,
+            firstReason = "model not found",
+        )
+        val result = ToolInterface(WorkflowSession(), failed).dispatch(ToolCommand.Run)
+
+        assertTrue(result is ToolResult.Rejected)
+        assertTrue((result as ToolResult.Rejected).reason.contains("model not found"))
+    }
+
+    @Test
+    fun `a cancelled run is rejected with the cancellation reason`() {
+        val cancelled = StubRunControl(
+            statusAfter = RunStatus.CANCELLED,
+            firstReason = "已取消：子进程已结束",
+        )
+        val result = ToolInterface(WorkflowSession(), cancelled).dispatch(ToolCommand.Run)
+
+        assertTrue(result is ToolResult.Rejected)
+        assertTrue((result as ToolResult.Rejected).reason.contains("已取消"))
+    }
+
     // ---- harness -----------------------------------------------------------
 
+    /** [statusAfter] is the terminal snapshot a blocking triggerRun() leaves behind. */
     private class StubRunControl(
-        private val status: RunStatus,
+        status: RunStatus = RunStatus.IDLE,
+        private val statusAfter: RunStatus = RunStatus.SUCCESS,
         private val acceptsRun: Boolean = true,
+        private val error: String? = null,
+        private val firstReason: String? = null,
     ) : WorkflowRunControl {
+        private var currentStatus = status
         var triggerCalls: Int = 0
             private set
 
         override fun triggerRun(): Boolean {
             triggerCalls++
+            if (acceptsRun) currentStatus = statusAfter
             return acceptsRun
         }
 
-        override fun runSnapshot(): RunSnapshot = RunSnapshot(status = status)
+        override fun runSnapshot(): RunSnapshot = RunSnapshot(
+            status = currentStatus,
+            error = error,
+            firstReason = firstReason,
+        )
     }
 
     private fun assumePosix() {

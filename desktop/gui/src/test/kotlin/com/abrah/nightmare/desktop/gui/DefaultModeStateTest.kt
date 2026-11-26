@@ -36,7 +36,7 @@ class DefaultModeStateTest {
             fields.map { it.key },
         )
         assertEquals("euler", fields.single { it.key == "sampler" }.value)
-        assertEquals("normal", fields.single { it.key == "scheduler" }.value)
+        assertEquals("discrete", fields.single { it.key == "scheduler" }.value)
         assertEquals("20", fields.single { it.key == "steps" }.value)
         assertTrue(fields.single { it.key == "sampler" }.options.contains("dpmpp_2m"))
         assertTrue(fields.single { it.key == "scheduler" }.options.contains("karras"))

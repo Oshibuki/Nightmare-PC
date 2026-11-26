@@ -216,6 +216,8 @@ class ChatSession(
             合法节点类型只有三种：core.prompt（提示词）、sd.sample（采样器）、core.output（输出）。
             add_node 的 id 必须唯一，只能使用字母、数字、下划线 _ 或连字符 -，不支持其它字符或重复 id。
             所有工具参数与节点参数的值一律是字符串，数字也要写成字符串，例如 steps 传 "20"。
+            sd.sample 的 scheduler 必须传 CLI 值（discrete、karras、exponential、sgm_uniform、simple、beta 等），不要传 normal 或 Normal；
+            sampler 必须传引擎名（如 euler、dpm++2m），不要传显示名。
             端口名：core.prompt 输出 prompt；sd.sample 输入 prompt、输出 image；core.output 输入 image。
             典型流程：new_workflow → add_node 三次（prompt、sampler、output）→
             connect 两次（prompt:prompt 到 sampler:prompt，sampler:image 到 output:image）→

@@ -117,6 +117,46 @@ class WorkflowRunnerTest {
     }
 
     @Test
+    fun `a legacy normal scheduler is projected as discrete without editing the workflow`() {
+        assumePosix()
+        val workflow = workflowWith(samplerParams = mapOf("scheduler" to "normal"))
+        val run = runFake(imageNames = listOf("image-1.png"), workflow = workflow)
+
+        assertEquals(RunStatus.SUCCESS, run.snapshot.status)
+        assertEquals("discrete", run.argvValue("--scheduler"))
+        assertEquals("normal", workflow.nodes.first { it.id == "sampler" }.params["scheduler"])
+    }
+
+    @Test
+    fun `display names become engine values while unknown values reach the CLI unchanged`() {
+        assumePosix()
+        val named = runFake(
+            imageNames = listOf("image-1.png"),
+            workflow = workflowWith(
+                samplerParams = mapOf("sampler" to "DPM++ 2M", "scheduler" to "Karras"),
+            ),
+        )
+        assertEquals(RunStatus.SUCCESS, named.snapshot.status)
+        assertEquals("dpm++2m", named.argvValue("--sampler"))
+        assertEquals("karras", named.argvValue("--scheduler"))
+
+        val upper = runFake(
+            imageNames = listOf("image-2.png"),
+            workflow = workflowWith(samplerParams = mapOf("scheduler" to "NORMAL")),
+        )
+        assertEquals("discrete", upper.argvValue("--scheduler"))
+
+        val unknown = runFake(
+            imageNames = listOf("image-3.png"),
+            workflow = workflowWith(
+                samplerParams = mapOf("sampler" to "Mystery", "scheduler" to "Turbo"),
+            ),
+        )
+        assertEquals("Mystery", unknown.argvValue("--sampler"))
+        assertEquals("Turbo", unknown.argvValue("--scheduler"))
+    }
+
+    @Test
     fun `a run started while another is active is rejected without changing the run state`() {
         assumePosix()
         val fake = fakeCli(imageNames = listOf("image-1.png"), sleepSeconds = 1)
@@ -342,6 +382,11 @@ class WorkflowRunnerTest {
         val dir: File,
         val outputs: List<File>,
     )
+
+    private fun FakeRun.argvValue(flag: String): String? {
+        val index = argv.indexOf(flag)
+        return if (index < 0) null else argv.getOrNull(index + 1)
+    }
 
     private fun assumePosix() {
         Assume.assumeFalse(
