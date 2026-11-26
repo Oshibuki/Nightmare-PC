@@ -71,6 +71,8 @@ fun AdvancedModeScreen(
     val runState = remember(state, revision) { state.runSnapshot() }
     val density = LocalDensity.current
     var zoomCenter by remember { mutableStateOf(Pt(640f, 400f)) }
+    var workflowPath by remember { mutableStateOf("") }
+    var fileFeedback by remember { mutableStateOf<PersistenceFeedback?>(null) }
     val deviceViewport = snapshot.viewport.forDevice(density.density)
 
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFFEEF1F6))) {
@@ -94,6 +96,15 @@ fun AdvancedModeScreen(
                 fontSize = 12.sp,
             )
         }
+
+        WorkflowFileBar(
+            path = workflowPath,
+            onPathChange = { workflowPath = it },
+            onSave = { fileFeedback = state.saveWorkflow(workflowPath) },
+            onLoad = { fileFeedback = state.loadWorkflow(workflowPath) },
+            feedback = fileFeedback,
+            modifier = Modifier.fillMaxWidth(),
+        )
 
         if (snapshot.message != null) {
             Row(
@@ -238,6 +249,14 @@ fun AdvancedModeScreen(
     }
 }
 
+/** The 节点类型 offered by the 高级模式 palette, in display order. */
+internal fun advancedPaletteTypes(): List<Pair<String, String>> = listOf(
+    DesktopNodeTypes.PROMPT to DesktopNodeTypes.prompt.title,
+    DesktopNodeTypes.SD_SAMPLER to DesktopNodeTypes.sdSampler.title,
+    DesktopNodeTypes.OUTPUT to DesktopNodeTypes.output.title,
+    DesktopNodeTypes.IMAGE_INPUT to DesktopNodeTypes.imageInput.title,
+)
+
 @Composable
 private fun NodePalette(onAdd: (String) -> Unit, modifier: Modifier = Modifier) {
     Column(
@@ -246,11 +265,7 @@ private fun NodePalette(onAdd: (String) -> Unit, modifier: Modifier = Modifier) 
         Text("节点库", style = MaterialTheme.typography.h6)
         Text("点击添加到画布", color = Color(0xFF6B7488), fontSize = 11.sp)
         Spacer(modifier = Modifier.height(12.dp))
-        listOf(
-            DesktopNodeTypes.PROMPT to DesktopNodeTypes.prompt.title,
-            DesktopNodeTypes.SD_SAMPLER to DesktopNodeTypes.sdSampler.title,
-            DesktopNodeTypes.OUTPUT to DesktopNodeTypes.output.title,
-        ).forEach { (type, title) ->
+        advancedPaletteTypes().forEach { (type, title) ->
             Button(
                 onClick = { onAdd(type) },
                 modifier = Modifier.fillMaxWidth(),

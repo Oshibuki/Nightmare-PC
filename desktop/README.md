@@ -140,6 +140,34 @@ A real LLM provider smoke is a separate, optional manual check: it needs
 never blocks acceptance — the `chat-turn` step above asserts the full path with
 a scripted fake ChatModel and a fake CLI, so it needs no key or network.
 
+### Provider configuration diagnostics
+
+Before setting up the chat provider, run the one-command self-check from
+`desktop/`:
+
+```bash
+export JAVA_HOME=/home/chjlxxc/Android/jdk-17   # or any JDK 17
+timeout 60s bash ./gradlew --no-daemon -q :gui:providerDiagnostics
+```
+
+It reports each `NIGHTMARE_LLM_*` variable as `SET` or `unset` — the key only
+as `密钥已配置` / `密钥未配置`, never its value or last four digits — and then
+one of three outcomes:
+
+- `SKIP` — a required setting is missing (a key for hosted providers, or
+  `NIGHTMARE_LLM_BASE_URL` for `CUSTOM`). No network call is attempted and the
+  exit code is `0`, so it is safe to run unconfigured or in CI.
+- `已连接` — the endpoint answered `GET /models`; the tool lists the filtered
+  chat models it found. Exit code `0`.
+- `未连接` — the endpoint could not be reached within the same 3 s connect /
+  8 s read budget the settings dialog uses. The reason is redacted, there is
+  no retry, and the exit code is `1` so a script can tell it apart from SKIP.
+
+`NIGHTMARE_LLM_MODEL` is optional (auto-selected when blank). Configuration
+comes from the same `ChatProviderSettings.resolved()` seam and connectivity
+from the same `ProviderProbe` as the chat shell — no separate HTTP logic and
+no longer timeouts are introduced.
+
 Graphics are opt-in: `VERIFY_GUI_LAUNCH=1` adds the `:gui:run` step. It uses an
 existing `DISPLAY` as-is, wraps with `xvfb-run -a` on a headless machine that
 has Xvfb, and logs `已跳过（无显示且无 xvfb-run）` when neither exists. The reference
