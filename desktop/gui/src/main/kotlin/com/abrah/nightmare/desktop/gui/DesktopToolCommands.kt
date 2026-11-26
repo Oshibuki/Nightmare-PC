@@ -14,6 +14,7 @@ object DesktopToolCommands {
     val TOOL_NAMES = listOf(
         "new_workflow", "add_node", "set_parameter", "connect", "run",
         "list_models", "get_canvas", "new_flow", "save_flow", "list_loras",
+        "download_lora", "delete_lora",
     )
 
     /** Optional library-root argument, shared by the two read-only inventory tools. */
@@ -141,7 +142,8 @@ object DesktopToolCommands {
 
                 "save_flow" -> function(
                     name,
-                    "把当前唯一工作流保存到参数 path 指定的本地路径；只写文件，不询问用户、不载入工作流。" +
+                    "把当前唯一工作流保存到参数 path 指定的本地路径；不载入工作流。" +
+                        "目标文件已存在时会先发确认型追问：选「保存」才覆盖，选「取消」则保留原文件且工作流不变。" +
                         "父目录必须存在且可写，失败时返回错误原因。",
                     JSONObject().put(
                         "path",
@@ -158,6 +160,36 @@ object DesktopToolCommands {
                         "损坏的文件单独列在 rejected 里。只读：不下载、不删除、不搜索。",
                     dirProperties(),
                     emptyList(),
+                )
+
+                "download_lora" -> function(
+                    name,
+                    "从给定 URL 下载一个 LoRA（.safetensors）到模型根目录的 lora 子目录。" +
+                        "源端声明的大小达到 512 MB 阈值时会先发确认型追问：选「下载」才写入，选「取消」则不落盘。" +
+                        "省略 dir 时使用 NIGHTMARE_MODELS 环境变量或 ~/.cache/nightmare-desktop/models。",
+                    JSONObject()
+                        .put(
+                            "url",
+                            JSONObject().put("type", "string")
+                                .put("description", "LoRA 文件的下载地址（http/https）；URL 查询参数不会写进文件名或结果。"),
+                        )
+                        .put("dir", dirProperties().getJSONObject("dir")),
+                    listOf("url"),
+                )
+
+                "delete_lora" -> function(
+                    name,
+                    "删除模型根目录 lora 子目录里的一个 LoRA 文件，路径必须在模型根目录内的 lora 目录里。" +
+                        "删除前必定发确认型追问：选「删除」才真正删除，选「取消」则文件保留。" +
+                        "省略 dir 时使用 NIGHTMARE_MODELS 环境变量或 ~/.cache/nightmare-desktop/models。",
+                    JSONObject()
+                        .put(
+                            "path",
+                            JSONObject().put("type", "string")
+                                .put("description", "要删除的 LoRA .safetensors 文件路径；越出 lora 目录会被拒绝。"),
+                        )
+                        .put("dir", dirProperties().getJSONObject("dir")),
+                    listOf("path"),
                 )
 
                 else -> function(name, "运行当前唯一工作流，等待 CLI 完成后把结果图片作为对话气泡返回。", JSONObject(), emptyList())
@@ -225,6 +257,14 @@ object DesktopToolCommands {
         "new_flow" -> ToolCommand.NewFlow
         "save_flow" -> ToolCommand.SaveFlow(args.getString("path"))
         "list_loras" -> ToolCommand.ListLoras(args.optString("dir").takeIf { it.isNotBlank() })
+        "download_lora" -> ToolCommand.DownloadLora(
+            args.getString("url"),
+            args.optString("dir").takeIf { it.isNotBlank() },
+        )
+        "delete_lora" -> ToolCommand.DeleteLora(
+            args.getString("path"),
+            args.optString("dir").takeIf { it.isNotBlank() },
+        )
         else -> null
     }
 
