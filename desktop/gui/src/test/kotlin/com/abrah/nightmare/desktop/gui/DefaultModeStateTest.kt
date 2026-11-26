@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.nio.file.Files
 
 /** Observable default-mode state: chain chips, selected drawer and the shared workflow. */
 class DefaultModeStateTest {
@@ -144,5 +145,32 @@ class DefaultModeStateTest {
         assertEquals("sampler", workflow.connections[0].toNode)
         assertEquals("sampler", workflow.connections[1].from.node)
         assertEquals("output", workflow.connections[1].toNode)
+    }
+
+    @Test
+    fun `saving writes the current shared workflow to the chosen path and reports success`() {
+        val session = WorkflowSession()
+        val state = DefaultModeState(session)
+        assertTrue(state.setSelectedParameter("prompt", "saved prompt"))
+        val path = Files.createTempFile("workflow-save", ".json")
+
+        val feedback = state.saveWorkflow(path.toString())
+
+        assertTrue(feedback.message, feedback.ok)
+        assertEquals(session.workflow.toJson(), Files.readString(path))
+    }
+
+    @Test
+    fun `saving to an unwritable path reports the error without touching the workflow`() {
+        val session = WorkflowSession()
+        val state = DefaultModeState(session)
+        val before = session.workflow.toJson()
+        val notADirectory = Files.createTempFile("workflow-parent", ".tmp")
+
+        val feedback = state.saveWorkflow(notADirectory.resolve("nested.json").toString())
+
+        assertFalse(feedback.ok)
+        assertTrue(feedback.message, feedback.message.contains("不可写"))
+        assertEquals(before, session.workflow.toJson())
     }
 }

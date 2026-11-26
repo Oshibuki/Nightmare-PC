@@ -7,6 +7,9 @@ import com.abrah.nightmare.desktop.graph.NodeType
 import com.abrah.nightmare.desktop.graph.Widget
 import com.abrah.nightmare.desktop.graph.Position
 import com.abrah.nightmare.desktop.graph.Workflow
+import com.abrah.nightmare.desktop.graph.WorkflowPersistence
+import com.abrah.nightmare.desktop.graph.WorkflowResult
+import java.nio.file.Path
 
 /** One chip in the default mode's top workflow rail. */
 data class ChainChip(val nodeId: String, val nodeType: String, val title: String, val summary: String)
@@ -22,6 +25,9 @@ data class ParameterField(
 
 /** Synthetic preview shown until a run produces a real PNG. */
 data class PreviewInfo(val title: String, val detail: String)
+
+/** User-facing result of one explicit save/load attempt, shown in the shell's feedback line. */
+data class PersistenceFeedback(val ok: Boolean, val message: String)
 
 /** Everything the default shell renders, derived from the shared workflow on demand. */
 data class DefaultModeSnapshot(
@@ -70,6 +76,39 @@ class WorkflowSession(initialWorkflow: Workflow = builtInTxt2imgWorkflow()) {
         )
         return true
     }
+
+    /**
+     * Explicit save of the one workflow. A blank/malformed path or an unwritable
+     * target becomes a readable error; the caller never has to catch an exception.
+     */
+    fun saveTo(rawPath: String): PersistenceFeedback {
+        val path = persistencePath(rawPath)
+            ?: return PersistenceFeedback(false, "请输入有效的工作流文件路径")
+        return when (val result = WorkflowPersistence.save(workflow, path)) {
+            is WorkflowResult.Ok -> PersistenceFeedback(true, "已保存工作流：$path")
+            is WorkflowResult.Err -> PersistenceFeedback(false, result.error.message)
+        }
+    }
+
+    /**
+     * Explicit load. Only [WorkflowResult.Ok] replaces the shared workflow; an
+     * [WorkflowResult.Err] reports its message and leaves every mode untouched
+     * (phase2-gui issue 16 discipline). [replaceWorkflow] notifies all modes.
+     */
+    fun loadFrom(rawPath: String): PersistenceFeedback {
+        val path = persistencePath(rawPath)
+            ?: return PersistenceFeedback(false, "请输入有效的工作流文件路径")
+        return when (val result = WorkflowPersistence.load(path)) {
+            is WorkflowResult.Ok -> {
+                replaceWorkflow(result.value)
+                PersistenceFeedback(true, "已载入工作流：$path")
+            }
+            is WorkflowResult.Err -> PersistenceFeedback(false, result.error.message)
+        }
+    }
+
+    private fun persistencePath(raw: String): Path? =
+        raw.takeIf { it.isNotBlank() }?.let { runCatching { Path.of(it.trim()) }.getOrNull() }
 }
 
 /** Default mode (chain rail + parameter drawer) state over one [WorkflowSession]. */
@@ -135,6 +174,12 @@ class DefaultModeState(
     /** Live child handle, so window-close cleanup can end an active run. */
     fun runHandle(): Process? = runner.processHandle()
 
+    /** Explicit save/load of the one shared workflow; both GUI shells use these. */
+    fun saveWorkflow(path: String): PersistenceFeedback = session.saveTo(path)
+
+    /** Load replaces the shared workflow only on success, then notifies every mode. */
+    fun loadWorkflow(path: String): PersistenceFeedback = session.loadFrom(path)
+
     private fun notifyChanged() {
         listeners.toList().forEach { it() }
     }
@@ -177,6 +222,7 @@ class DefaultModeState(
 
         DesktopNodeTypes.SD_SAMPLER -> "${node.params["sampler"].orEmpty()} · ${node.params["steps"].orEmpty()} steps"
         DesktopNodeTypes.OUTPUT -> "save=${node.params["save"].orEmpty()}"
+        DesktopNodeTypes.IMAGE_INPUT -> "强度 ${node.params["strength"].orEmpty()}"
         else -> node.params.values.take(2).joinToString(" · ")
     }
 

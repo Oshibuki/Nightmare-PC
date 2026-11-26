@@ -2,6 +2,7 @@ package com.abrah.nightmare.desktop.gui
 
 import com.abrah.nightmare.desktop.canvas.Pt
 import com.abrah.nightmare.desktop.graph.DesktopNodeTypes
+import com.abrah.nightmare.desktop.graph.Position
 import com.abrah.nightmare.desktop.graph.Source
 import com.abrah.nightmare.desktop.graph.Workflow
 import org.junit.Assert.assertEquals
@@ -46,7 +47,7 @@ class AdvancedModeStateTest {
     }
 
     @Test
-    fun `palette adds all three presentation node types to the one workflow`() {
+    fun `palette node types add to the one workflow with their defaults`() {
         val session = WorkflowSession(Workflow())
         val state = AdvancedModeState(session)
 
@@ -63,6 +64,47 @@ class AdvancedModeStateTest {
         val sampler = session.workflow.nodes.single { it.type == DesktopNodeTypes.SD_SAMPLER }
         assertEquals("20", sampler.params["steps"])
         assertEquals("true", session.workflow.nodes.single { it.type == DesktopNodeTypes.OUTPUT }.params["save"])
+    }
+
+    @Test
+    fun `advanced palette offers the image input node alongside the other three types`() {
+        assertEquals(
+            listOf(
+                DesktopNodeTypes.PROMPT,
+                DesktopNodeTypes.SD_SAMPLER,
+                DesktopNodeTypes.OUTPUT,
+                DesktopNodeTypes.IMAGE_INPUT,
+            ),
+            advancedPaletteTypes().map { it.first },
+        )
+        assertEquals("图片输入", advancedPaletteTypes().single { it.first == DesktopNodeTypes.IMAGE_INPUT }.second)
+    }
+
+    @Test
+    fun `an image input added from the palette exposes editable path and strength on the canvas`() {
+        val session = WorkflowSession(Workflow())
+        val state = AdvancedModeState(session)
+
+        assertTrue(state.addNode(DesktopNodeTypes.IMAGE_INPUT))
+        val node = session.workflow.nodes.single()
+        assertEquals(DesktopNodeTypes.IMAGE_INPUT, node.type)
+        assertEquals("", node.params["path"])
+        assertEquals(DesktopNodeTypes.DEFAULT_IMG2IMG_STRENGTH, node.params["strength"])
+
+        assertTrue(state.selectNode(node.id))
+        val fields = state.snapshot().fields
+        assertEquals(listOf("path", "strength"), fields.map { it.key })
+        assertEquals("text", fields.single { it.key == "path" }.kind)
+        assertEquals("强度", fields.single { it.key == "strength" }.label)
+
+        assertTrue(state.setSelectedParameter("path", "/tmp/init.png"))
+        assertTrue(state.setSelectedParameter("strength", "0.4"))
+        assertEquals("/tmp/init.png", session.workflow.byId[node.id]!!.params["path"])
+        assertEquals("0.4", state.snapshot().fields.single { it.key == "strength" }.value)
+        assertTrue(
+            "the canvas card should show the edited strength",
+            state.snapshot().nodes.single().summary.contains("强度 0.4"),
+        )
     }
 
     @Test
@@ -141,6 +183,66 @@ class AdvancedModeStateTest {
         assertTrue(advancedState.addNode(DesktopNodeTypes.PROMPT))
 
         assertEquals(listOf("core.prompt"), defaultState.snapshot().chips.map { it.nodeType })
+    }
+
+    @Test
+    fun `loading a valid workflow replaces the shared one seen by default and advanced modes`() {
+        val session = WorkflowSession()
+        val defaultState = DefaultModeState(session)
+        val advancedState = AdvancedModeState(session)
+        var changes = 0
+        val unsubscribe = session.addChangeListener { changes++ }
+        val file = Files.createTempFile("workflow-load", ".json")
+        val source = Workflow(listOf(DesktopNodeTypes.output.createNode("onlyOutput", Position(10f, 20f))))
+        Files.writeString(file, source.toJson())
+
+        val feedback = advancedState.loadWorkflow(file.toString())
+
+        assertTrue(feedback.message, feedback.ok)
+        assertTrue("loading must notify every mode that shares the session", changes > 0)
+        assertEquals(listOf("onlyOutput"), session.workflow.nodes.map { it.id })
+        assertEquals(listOf("onlyOutput"), defaultState.snapshot().chips.map { it.nodeId })
+        assertEquals(listOf("onlyOutput"), advancedState.snapshot().nodes.map { it.id })
+        unsubscribe()
+    }
+
+    @Test
+    fun `a broken or missing workflow file only reports an error and keeps every mode's workflow`() {
+        val session = WorkflowSession()
+        val defaultState = DefaultModeState(session)
+        val advancedState = AdvancedModeState(session)
+        val before = session.workflow.toJson()
+        val bad = Files.createTempFile("workflow-bad", ".json")
+        Files.writeString(bad, "{not json")
+
+        val badFeedback = defaultState.loadWorkflow(bad.toString())
+        assertFalse(badFeedback.ok)
+        assertTrue(badFeedback.message, badFeedback.message.contains("无法解析"))
+        assertEquals(before, session.workflow.toJson())
+        assertEquals(listOf("prompt", "sampler", "output"), advancedState.snapshot().nodes.map { it.id })
+
+        val missing = advancedState.loadWorkflow("/no/such/dir/missing-workflow.json")
+        assertFalse(missing.ok)
+        assertTrue(missing.message, missing.message.contains("无法读取"))
+        assertEquals(before, session.workflow.toJson())
+        assertEquals(listOf("prompt", "sampler", "output"), defaultState.snapshot().chips.map { it.nodeId })
+    }
+
+    @Test
+    fun `a workflow saved in advanced mode loads back through default mode`() {
+        val session = WorkflowSession()
+        val advancedState = AdvancedModeState(session)
+        assertTrue(advancedState.addNode(DesktopNodeTypes.IMAGE_INPUT))
+        val path = Files.createTempFile("workflow-roundtrip", ".json")
+
+        val saved = advancedState.saveWorkflow(path.toString())
+        assertTrue(saved.message, saved.ok)
+
+        val otherSession = WorkflowSession()
+        val defaultState = DefaultModeState(otherSession)
+        val loaded = defaultState.loadWorkflow(path.toString())
+        assertTrue(loaded.message, loaded.ok)
+        assertEquals(session.workflow.toJson(), otherSession.workflow.toJson())
     }
 
     @Test

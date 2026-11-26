@@ -68,6 +68,8 @@ fun DefaultModeScreen(
     var timeoutMinutes by remember {
         mutableStateOf((GuiRunSettings.timeoutMillis / 60_000L).toString())
     }
+    var workflowPath by remember { mutableStateOf("") }
+    var fileFeedback by remember { mutableStateOf<PersistenceFeedback?>(null) }
 
     Column(
         modifier = Modifier.fillMaxSize().background(Color(0xFFF5F7FB)),
@@ -90,6 +92,15 @@ fun DefaultModeScreen(
                     GuiRunSettings.timeoutMillis = it * 60_000L
                 }
             },
+        )
+
+        WorkflowFileBar(
+            path = workflowPath,
+            onPathChange = { workflowPath = it },
+            onSave = { fileFeedback = state.saveWorkflow(workflowPath) },
+            onLoad = { fileFeedback = state.loadWorkflow(workflowPath) },
+            feedback = fileFeedback,
+            modifier = Modifier.fillMaxWidth(),
         )
 
         if (runState.status == RunStatus.FAILURE || runState.status == RunStatus.CANCELLED) {
@@ -211,6 +222,48 @@ private fun RunStatusBanner(runState: RunSnapshot, modifier: Modifier = Modifier
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(message, color = if (cancelled) Color.White else Color(0xFF9B2C2C), fontSize = 12.sp)
+    }
+}
+
+/**
+ * Explicit 工作流 save/load entry shared by 默认模式 and 高级模式 (对话模式 has no
+ * file bar). A text path keeps the seam a plain string, so the Ok/Err workflow
+ * discipline behind the buttons is testable on the JVM without a native picker.
+ */
+@Composable
+internal fun WorkflowFileBar(
+    path: String,
+    onPathChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onLoad: () -> Unit,
+    feedback: PersistenceFeedback?,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.background(Color.White).padding(horizontal = 20.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = path,
+            onValueChange = onPathChange,
+            label = { Text("工作流文件路径") },
+            modifier = Modifier.width(320.dp),
+            singleLine = true,
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Button(onClick = onSave) { Text("保存工作流") }
+        Spacer(modifier = Modifier.width(8.dp))
+        Button(onClick = onLoad) { Text("载入工作流") }
+        if (feedback != null) {
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                feedback.message,
+                color = if (feedback.ok) Color(0xFF2E7D32) else Color(0xFFB23B3B),
+                fontSize = 12.sp,
+                maxLines = 2,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 
