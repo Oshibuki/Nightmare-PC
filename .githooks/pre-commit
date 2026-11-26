@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Lightweight pre-commit guardrail. The full build + JVM test suite + fake CLI
+# seams already run in CI via `desktop/verify-gui.sh` (ADR-0011 single entry),
+# so this hook deliberately checks only the cheap things CI's diff view hides:
+# whitespace errors and conflict markers in staged Kotlin/shell/doc files.
+# Keep it fast — a slow hook gets bypassed with --no-verify.
+set -euo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+
+# --check flags trailing whitespace, space-before-tab, and conflict markers.
+if ! git diff --cached --check -- $staged; then
+  echo "pre-commit: whitespace/conflict-marker error in staged files (above)." >&2
+  echo "pre-commit: fix them, or bypass with --no-verify if intentional." >&2
+  exit 1
+fi
+
+echo "pre-commit: staged diff clean (full tests run in CI via verify-gui.sh)."
