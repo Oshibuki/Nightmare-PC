@@ -44,6 +44,15 @@ timeout 300s bash ./gradlew --no-daemon -q :gui:verifyRealProvider
 -**渲染刻意用假 CLI**：本验证覆盖的是 agent→工具→工作流链，不是引擎图像质量；真实权重冒烟由 `verify-gui.sh` 的 real-smoke 步独立覆盖。
 -**可复现**：脚本 `desktop/gui/src/test/kotlin/.../RealProviderVerificationMain.kt` + gradle task `:gui:verifyRealProvider`；缺配置 SKIP、不并入 ADR-0011 的单一脚本。
 
+## 后续：16 工具对齐后的复验（2026-11-26）
+
+工具面按 ADR-0014 新增 5 个映射工具（list_models / get_canvas / new_flow / save_flow / list_loras）后，复用 `:gui:verifyRealProvider` 复验。验证脚本加了 `NIGHTMARE_VERIFY_PROMPT` 话术注入，判据改为「本次调用 run 才要求 Picture」，避免只读/保存话术被误判失败。
+
+-**新工具话术**（`先列出本地可用模型，再看看当前画布，然后把工作流保存到 /tmp/...`）：真 LLM 一次调用 `list_models` → `get_canvas` → `save_flow`，三个全 ok，保存文件真实落盘（合法 format=1 JSON）。证据：`/tmp/nm-desktop/logs/tool-align-real-provider-rerun.log`。
+-**默认出图话术**：8 步原链路照常、Picture 气泡出现、无回归。证据：`/tmp/nm-desktop/logs/tool-align-real-provider-default-rerun.log`。
+
+结论：真模型看懂了新增工具的 schema，一次选对并填对参数，无需再改提示词/schema。这是"按可行性分组对齐"决策（ADR-0014）在真 provider 下的兑现。
+
 ## 诚实边界
 
 - 只验证了一句话、一个本地模型（Qwen3.5-4B）。ollama :11434、llama-server :8001（Bonsai-8B）未验证——它们是 Q2 的对照项，非本轮目标。

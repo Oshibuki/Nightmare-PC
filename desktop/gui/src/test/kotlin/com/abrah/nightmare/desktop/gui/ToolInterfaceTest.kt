@@ -4,12 +4,17 @@ import com.abrah.nightmare.desktop.graph.DesktopNodeTypes
 import com.abrah.nightmare.desktop.graph.Workflow
 import com.abrah.nightmare.desktop.graph.WorkflowPersistence
 import com.abrah.nightmare.desktop.graph.WorkflowResult
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume
 import org.junit.Test
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * JVM seam for the external-tool command surface (ADR-0008): a future chat
@@ -155,6 +160,113 @@ class ToolInterfaceTest {
     }
 
     @Test
+    fun `list_loras lists safetensors under lora directories and keeps broken ones visible`() {
+        val root = Files.createTempDirectory("tool-list-loras")
+        val lora = root.resolve("loras/character/dream.safetensors")
+        val upperLora = root.resolve("LoRA/style.safetensors")
+        val checkpoint = root.resolve("checkpoints/base.safetensors")
+        val broken = root.resolve("loras/broken.safetensors")
+        writeSafetensors(lora)
+        writeSafetensors(upperLora)
+        writeSafetensors(checkpoint)
+        Files.writeString(broken, "truncated")
+
+        val result = ToolInterface(WorkflowSession(), StubRunControl())
+            .dispatch(ToolCommand.ListLoras(root.toString()))
+        assertTrue(result is ToolResult.Ok)
+        val listing = JSONObject((result as ToolResult.Ok).summary)
+        val loras = listing.getJSONArray("loras")
+        val paths = (0 until loras.length()).map { loras.getJSONObject(it).getString("path") }
+        assertTrue("a readable lora must appear: $paths", paths.any { it.endsWith("dream.safetensors") })
+        assertTrue("the directory match is case-insensitive: $paths", paths.any { it.endsWith("style.safetensors") })
+        assertFalse("a checkpoint is not a lora: $paths", paths.any { it.contains("checkpoints") })
+
+        val rejected = listing.getJSONArray("rejected")
+        val rejectedPaths = (0 until rejected.length()).map { rejected.getJSONObject(it).getString("path") }
+        assertTrue("a broken lora must not vanish: $rejectedPaths", rejectedPaths.any { it.endsWith("broken.safetensors") })
+    }
+
+    @Test
+    fun `list_models reports the readable models a directory holds and rejects a missing root`() {
+        val dir = Files.createTempDirectory("tool-list-models")
+        val model = dir.resolve("checkpoints/dream.safetensors")
+        writeSafetensors(model)
+        Files.writeString(dir.resolve("notes.txt"), "not a model")
+        val tools = ToolInterface(WorkflowSession(), StubRunControl())
+
+        val result = tools.dispatch(ToolCommand.ListModels(dir.toString()))
+        assertTrue(result is ToolResult.Ok)
+        val listing = JSONObject((result as ToolResult.Ok).summary)
+        assertEquals(dir.toAbsolutePath().toString(), listing.getString("root"))
+        val models = listing.getJSONArray("models")
+        assertEquals(1, models.length())
+        val found = models.getJSONObject(0)
+        assertTrue(found.getString("path").endsWith("dream.safetensors"))
+        assertEquals("safetensors", found.getString("format"))
+        assertEquals(1, found.getInt("tensors"))
+
+        val missing = tools.dispatch(ToolCommand.ListModels(dir.resolve("no-such-dir").toString()))
+        assertTrue(missing is ToolResult.Rejected)
+        assertTrue((missing as ToolResult.Rejected).reason.contains("模型库"))
+    }
+
+    @Test
+    fun `save_flow writes a loadable workflow and rejects an unwritable path`() {
+        val dir = Files.createTempDirectory("tool-save-flow")
+        val session = WorkflowSession()
+        val tools = ToolInterface(session, DefaultModeState(session))
+        assertTrue(tools.dispatch(ToolCommand.SetParameter("prompt", "prompt", "saved by tool")) is ToolResult.Ok)
+
+        val target = dir.resolve("flow.json")
+        val saved = tools.dispatch(ToolCommand.SaveFlow(target.toString()))
+        assertTrue(saved is ToolResult.Ok)
+        assertTrue(Files.exists(target))
+        val loaded = WorkflowPersistence.load(target)
+        assertTrue(loaded is WorkflowResult.Ok)
+        assertEquals(session.workflow, (loaded as WorkflowResult.Ok).value)
+        assertEquals("saved by tool", loaded.value.byId["prompt"]!!.params["prompt"])
+
+        val fileNotDir = dir.resolve("not-a-directory")
+        Files.writeString(fileNotDir, "occupied")
+        val rejected = tools.dispatch(ToolCommand.SaveFlow(fileNotDir.resolve("flow.json").toString()))
+        assertTrue(rejected is ToolResult.Rejected)
+        assertTrue("the failure must reach the caller: $rejected", (rejected as ToolResult.Rejected).reason.contains("不可写"))
+    }
+
+    @Test
+    fun `new_flow clears the shared workflow just like new_workflow`() {
+        val session = WorkflowSession()
+        val tools = ToolInterface(session, DefaultModeState(session))
+        assertEquals(3, session.workflow.nodes.size)
+
+        val result = tools.dispatch(ToolCommand.NewFlow)
+        assertTrue(result is ToolResult.Ok)
+        assertTrue(session.workflow.nodes.isEmpty())
+        assertTrue(session.workflow.connections.isEmpty())
+    }
+
+    @Test
+    fun `get_canvas exposes the current workflow as readable JSON with nodes parameters and wires`() {
+        val session = WorkflowSession()
+        val tools = ToolInterface(session, DefaultModeState(session))
+        assertTrue(
+            tools.dispatch(ToolCommand.SetParameter("prompt", "prompt", "dawn at the lake")) is ToolResult.Ok,
+        )
+
+        val result = tools.dispatch(ToolCommand.GetCanvas)
+        assertTrue(result is ToolResult.Ok)
+        val canvas = JSONObject((result as ToolResult.Ok).summary)
+        assertEquals(1, canvas.getInt("format"))
+        val nodes = canvas.getJSONArray("nodes")
+        assertEquals(3, nodes.length())
+        val byId = (0 until nodes.length()).map { nodes.getJSONObject(it) }.associateBy { it.getString("id") }
+        assertEquals(DesktopNodeTypes.SD_SAMPLER, byId.getValue("sampler").getString("type"))
+        assertEquals("dawn at the lake", byId.getValue("prompt").getJSONObject("params").getString("prompt"))
+        assertEquals("prompt:prompt", byId.getValue("sampler").getJSONObject("inputs").getString("prompt"))
+        assertEquals("sampler:image", byId.getValue("output").getJSONObject("inputs").getString("image"))
+    }
+
+    @Test
     fun `a run command is rejected while a run is already in flight`() {
         val busy = StubRunControl(status = RunStatus.RUNNING)
         val rejected = ToolInterface(WorkflowSession(), busy).dispatch(ToolCommand.Run)
@@ -210,6 +322,17 @@ class ToolInterfaceTest {
     }
 
     // ---- harness -----------------------------------------------------------
+
+    /** A tiny but valid safetensors header, so listing needs no real 4 GB weights. */
+    private fun writeSafetensors(path: Path) {
+        val header = """{"tensor0":{"dtype":"F16","shape":[1],"data_offsets":[0,2]}}"""
+        val bytes = header.toByteArray(Charsets.UTF_8)
+        val buffer = ByteBuffer.allocate(8 + bytes.size).order(ByteOrder.LITTLE_ENDIAN)
+        buffer.putLong(bytes.size.toLong())
+        buffer.put(bytes)
+        Files.createDirectories(path.parent)
+        Files.write(path, buffer.array())
+    }
 
     /** [statusAfter] is the terminal snapshot a blocking triggerRun() leaves behind. */
     private class StubRunControl(
