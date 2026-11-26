@@ -32,8 +32,9 @@ object DesktopToolCommands {
                 "add_node" -> function(
                     name,
                     "添加一个节点。id 必须唯一，只能使用字母、数字、下划线 _ 或连字符 -；" +
-                        "type 只能是 core.prompt、sd.sample、core.output。" +
-                        "也接受 prompt / sampler / sample / sd_sampler / output 这些常见别名。",
+                        "type 只能是 core.prompt、core.image、sd.sample、core.output。" +
+                        "也接受 prompt / image / img / init_image / sampler / sample / sd_sampler / output 这些常见别名。" +
+                        "图生图用 core.image 节点：params 里写本地 PNG 路径 path 与重绘强度 strength（字符串 0..1，默认 \"0.75\"）。",
                     JSONObject()
                         .put(
                             "id",
@@ -43,8 +44,21 @@ object DesktopToolCommands {
                         .put(
                             "type",
                             JSONObject().put("type", "string")
-                                .put("enum", JSONArray(listOf(DesktopNodeTypes.PROMPT, DesktopNodeTypes.SD_SAMPLER, DesktopNodeTypes.OUTPUT)))
-                                .put("description", "节点类型：core.prompt（提示词）、sd.sample（采样器）、core.output（输出）。"),
+                                .put(
+                                    "enum",
+                                    JSONArray(
+                                        listOf(
+                                            DesktopNodeTypes.PROMPT,
+                                            DesktopNodeTypes.IMAGE_INPUT,
+                                            DesktopNodeTypes.SD_SAMPLER,
+                                            DesktopNodeTypes.OUTPUT,
+                                        ),
+                                    ),
+                                )
+                                .put(
+                                    "description",
+                                    "节点类型：core.prompt（提示词）、core.image（图片输入）、sd.sample（采样器）、core.output（输出）。",
+                                ),
                         )
                         .put("x", JSONObject().put("type", "number").put("description", "画布横坐标（世界坐标），可省略。"))
                         .put("y", JSONObject().put("type", "number").put("description", "画布纵坐标（世界坐标），可省略。"))
@@ -52,34 +66,39 @@ object DesktopToolCommands {
                             "params",
                             JSONObject().put("type", "object")
                                 .put("additionalProperties", JSONObject().put("type", "string"))
-                                .put("description", "节点初始参数对象；所有值必须是字符串，例如 {\"steps\":\"20\"}。"),
+                                .put(
+                                    "description",
+                                    "节点初始参数对象；所有值必须是字符串，例如 {\"steps\":\"20\"}。" +
+                                        "core.image 用 path（本地 PNG 路径）与 strength（字符串 0..1，默认 \"0.75\"）。",
+                                ),
                         ),
                     listOf("id", "type"),
                 )
 
                 "set_parameter" -> function(
                     name,
-                    "给已有节点设置一个参数，例如 prompt 节点的 prompt 或 sampler 节点的 seed；value 一律传字符串。" +
+                    "给已有节点设置一个参数，例如 prompt 节点的 prompt、sampler 节点的 seed 或 core.image 节点的 path/strength；value 一律传字符串。" +
+                        "core.image 的 path 是本地 PNG 路径，strength 是 0..1 的字符串，默认 \"0.75\"。" +
                         "调度器 scheduler 必须传 CLI 值（discrete、karras 等），不要传 normal；" +
                         "采样器 sampler 传引擎名（如 euler、dpm++2m），不要传显示名；" +
                         "steps 最大 $MAX_RUN_STEPS，超过会被拒绝；旧工作流里更大的步数在运行时钳制为 $MAX_RUN_STEPS。",
                     JSONObject()
                         .put("nodeId", JSONObject().put("type", "string").put("description", "已有节点的 id。"))
-                        .put("key", JSONObject().put("type", "string").put("description", "参数名，例如 prompt、negative、seed、steps。"))
+                        .put("key", JSONObject().put("type", "string").put("description", "参数名，例如 prompt、negative、seed、steps、path、strength。"))
                         .put("value", JSONObject().put("type", "string").put("description", "参数值；一律传字符串，数字也写成字符串。")),
                     listOf("nodeId", "key", "value"),
                 )
 
                 "connect" -> function(
                     name,
-                    "连接两个节点。典型连线：prompt 节点的 prompt 输出 -> sampler 节点的 prompt 输入；" +
-                        "sampler 节点的 image 输出 -> output 节点的 image 输入。" +
-                        "toPort 填目标输入端口名（sampler 用 prompt，output 用 image）；fromPort 可省略。",
+                    "连接两个节点。典型连线：prompt:prompt -> sampler:prompt；sampler:image -> output:image；" +
+                        "图生图另加 core.image:image -> sampler:initImage（prompt 连线保持不变）。" +
+                        "toPort 填目标输入端口名（sampler 用 prompt 或 initImage，output 用 image）；fromPort 可省略。",
                     JSONObject()
                         .put("fromNode", JSONObject().put("type", "string").put("description", "源节点 id。"))
                         .put("toNode", JSONObject().put("type", "string").put("description", "目标节点 id。"))
-                        .put("toPort", JSONObject().put("type", "string").put("description", "目标输入端口名：sampler 用 prompt，output 用 image。"))
-                        .put("fromPort", JSONObject().put("type", "string").put("description", "源输出端口名：prompt 节点为 prompt，sampler 节点为 image；只有一个输出时可省略。")),
+                        .put("toPort", JSONObject().put("type", "string").put("description", "目标输入端口名：sampler 用 prompt 或 initImage，output 用 image。"))
+                        .put("fromPort", JSONObject().put("type", "string").put("description", "源输出端口名：core.image 与 sampler 均为 image，prompt 节点为 prompt；只有一个输出时可省略。")),
                     listOf("fromNode", "toNode", "toPort"),
                 )
 
@@ -154,6 +173,12 @@ object DesktopToolCommands {
     private val TYPE_ALIASES = mapOf(
         "prompt" to DesktopNodeTypes.PROMPT,
         DesktopNodeTypes.PROMPT to DesktopNodeTypes.PROMPT,
+        "image" to DesktopNodeTypes.IMAGE_INPUT,
+        "img" to DesktopNodeTypes.IMAGE_INPUT,
+        "init_image" to DesktopNodeTypes.IMAGE_INPUT,
+        "initimage" to DesktopNodeTypes.IMAGE_INPUT,
+        "image_input" to DesktopNodeTypes.IMAGE_INPUT,
+        DesktopNodeTypes.IMAGE_INPUT to DesktopNodeTypes.IMAGE_INPUT,
         "sampler" to DesktopNodeTypes.SD_SAMPLER,
         "sd_sampler" to DesktopNodeTypes.SD_SAMPLER,
         "sample" to DesktopNodeTypes.SD_SAMPLER,

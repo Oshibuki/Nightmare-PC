@@ -1,8 +1,11 @@
 package com.abrah.nightmare.desktop.gui
 
+import com.abrah.nightmare.desktop.graph.ConnectionResult
+import com.abrah.nightmare.desktop.graph.DesktopNodeTypes
 import com.abrah.nightmare.desktop.graph.Workflow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume
 import org.junit.Test
@@ -151,6 +154,77 @@ class WorkflowRunnerTest {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun `an image input node produces an img2img run with the source and default strength`() {
+        assumePosix()
+        val initPath = File(Files.createTempDirectory("gui-img2img-test").toFile(), "source.png").path
+        val run = runFake(
+            imageNames = listOf("img2img-result.png"),
+            workflow = workflowWithImageNode(initPath),
+        )
+
+        assertEquals("img2img", run.argv.first())
+        assertEquals(initPath, run.argvValue("--init-img"))
+        assertEquals("0.75", run.argvValue("--strength"))
+        assertNull("img2img has no --batch option", run.argvValue("--batch"))
+        assertTrue(
+            "shared txt2img flags must survive the img2img projection: ${run.argv}",
+            run.argv.containsAll(
+                listOf(
+                    "--model", "/models/sd15.safetensors",
+                    "--prompt", "a quiet mountain lake at dawn",
+                    "--out", File(run.dir, "img2img-result.png").path,
+                ),
+            ),
+        )
+        assertEquals(run.argv, run.snapshot.command.drop(1))
+        assertEquals(RunStatus.SUCCESS, run.snapshot.status)
+        val result = File(run.dir, "img2img-result.png")
+        assertTrue("the fake CLI's PNG should reach the result panel", result.isFile)
+        assertEquals(result.path, run.snapshot.results.single().path)
+    }
+
+    @Test
+    fun `an image node with no strength projects the shared img2img default`() {
+        assumePosix()
+        // The spec fixes the default at 0.75; the node widget and the runner's
+        // blank-strength fallback must read the same core constant (no drift).
+        assertEquals("0.75", DesktopNodeTypes.DEFAULT_IMG2IMG_STRENGTH)
+        assertEquals(
+            DesktopNodeTypes.DEFAULT_IMG2IMG_STRENGTH,
+            DesktopNodeTypes.imageInput.createNode("init").params["strength"],
+        )
+        val run = runFake(
+            imageNames = listOf("blank-strength.png"),
+            workflow = workflowWithImageNode("/tmp/init.png", strength = ""),
+        )
+        assertEquals(DesktopNodeTypes.DEFAULT_IMG2IMG_STRENGTH, run.argvValue("--strength"))
+    }
+
+    @Test
+    fun `strength passes through unchanged while workflows without an image node stay txt2img`() {
+        assumePosix()
+        val chosen = runFake(
+            imageNames = listOf("chosen.png"),
+            workflow = workflowWithImageNode("/tmp/init.png", strength = "0.35"),
+        )
+        assertEquals("0.35", chosen.argvValue("--strength"))
+
+        // The CLI owns the 0..1 usage error; the GUI must not silently clamp it.
+        val outOfRange = runFake(
+            imageNames = listOf("out-of-range.png"),
+            workflow = workflowWithImageNode("/tmp/init.png", strength = "1.4"),
+        )
+        assertEquals("1.4", outOfRange.argvValue("--strength"))
+
+        val txt2img = runFake(imageNames = listOf("plain.png"), workflow = builtInTxt2imgWorkflow())
+        assertEquals("txt2img", txt2img.argv.first())
+        assertNull(txt2img.argvValue("--init-img"))
+        assertNull(txt2img.argvValue("--strength"))
+        assertEquals("1", txt2img.argvValue("--batch"))
+        assertEquals(RunStatus.SUCCESS, txt2img.snapshot.status)
     }
 
     @Test
@@ -508,6 +582,19 @@ class WorkflowRunnerTest {
         val accepted = runner.run(workflow)
         val argv = if (fake.argvFile.isFile) fake.argvFile.readLines() else emptyList()
         return FakeRun(accepted, runner.snapshot(), argv, fake.dir, fake.outputs.take(imageNames.size))
+    }
+
+    private fun workflowWithImageNode(path: String, strength: String? = null): Workflow {
+        val params = buildMap {
+            put("path", path)
+            if (strength != null) put("strength", strength)
+        }
+        val image = DesktopNodeTypes.imageInput.createNode("init", params = params)
+        val base = builtInTxt2imgWorkflow()
+        val wired = base.copy(nodes = base.nodes + image)
+            .connect("init", "sampler", "initImage") as? ConnectionResult.Connected
+            ?: error("image wire was rejected")
+        return wired.workflow
     }
 
     private fun workflowWith(

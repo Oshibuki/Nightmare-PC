@@ -218,9 +218,19 @@ class WorkflowRunner(private val config: RunConfig = RunConfig()) {
         return true
     }
 
-    /** Workflow → CLI arguments. The CLI keeps no state between invocations. */
+    /**
+     * Workflow → CLI arguments. The CLI keeps no state between invocations.
+     * An image input node selects `img2img` (ADR-0013): the same single child
+     * process, with `--init-img`/`--strength` from that node and no `--batch`,
+     * which the img2img subcommand does not accept. Without such a node the
+     * txt2img projection is unchanged.
+     */
     private fun project(workflow: Workflow): List<String> {
-        val args = mutableListOf(config.cliExecutable, "txt2img")
+        val imageNode = workflow.nodes.firstOrNull { it.type == DesktopNodeTypes.IMAGE_INPUT }
+        val args = mutableListOf(
+            config.cliExecutable,
+            if (imageNode == null) "txt2img" else "img2img",
+        )
         config.modelPath?.takeIf { it.isNotBlank() }?.let { args += listOf("--model", it) }
         val promptNode = workflow.nodes.firstOrNull { it.type == DesktopNodeTypes.PROMPT }
         val samplerNode = workflow.nodes.firstOrNull { it.type == DesktopNodeTypes.SD_SAMPLER }
@@ -241,7 +251,18 @@ class WorkflowRunner(private val config: RunConfig = RunConfig()) {
             }
         }
         args += listOf("--out", config.outputPath)
-        args += listOf("--batch", config.batch.toString())
+        if (imageNode == null) {
+            args += listOf("--batch", config.batch.toString())
+        } else {
+            args += listOf("--init-img", imageNode.params["path"] ?: "")
+            // A written strength is passed through untouched: the CLI owns the
+            // 0..1 usage check (ADR-0013), so the GUI must not silently clamp it.
+            args += listOf(
+                "--strength",
+                imageNode.params["strength"]?.takeIf { it.isNotBlank() }
+                    ?: DesktopNodeTypes.DEFAULT_IMG2IMG_STRENGTH,
+            )
+        }
         return args
     }
 

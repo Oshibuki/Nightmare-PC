@@ -75,11 +75,15 @@ data class Source(val node: String, val port: String? = null) {
     }
 }
 
-/** The three txt2img node types shipped with the desktop GUI. */
+/** Desktop-authored workflow node types (ADR-0007); no execution semantics here. */
 object DesktopNodeTypes {
     const val PROMPT = "core.prompt"
     const val SD_SAMPLER = "sd.sample"
     const val OUTPUT = "core.output"
+    const val IMAGE_INPUT = "core.image"
+
+    /** The one img2img strength default, shared by the node widget and the runner fallback. */
+    const val DEFAULT_IMG2IMG_STRENGTH = "0.75"
 
     val prompt = NodeType(
         name = PROMPT,
@@ -95,7 +99,11 @@ object DesktopNodeTypes {
     val sdSampler = NodeType(
         name = SD_SAMPLER,
         title = "SD 采样器",
-        inputs = listOf(Port("prompt", "PROMPT")),
+        // The original prompt:PROMPT port is untouched. img2img feeds the
+        // separate initImage:IMAGE port, so txt2img wires keep their meaning
+        // (ADR-0013). The runner switches subcommand by node presence, not by
+        // treating a picture as a prompt.
+        inputs = listOf(Port("prompt", "PROMPT"), Port("initImage", "IMAGE")),
         outputs = listOf(Port("image", "IMAGE")),
         widgets = listOf(
             Widget("sampler", "采样器", "choice", "euler"),
@@ -117,5 +125,22 @@ object DesktopNodeTypes {
         widgets = listOf(Widget("save", "保存图片", "boolean", "true")),
     )
 
-    val registry: Map<String, NodeType> = listOf(prompt, sdSampler, output).associateBy { it.name }
+    /**
+     * Ordinary img2img source (ADR-0013): a local PNG path plus its strength.
+     * Both stay string params so `format=1` needs no change. The IMAGE output
+     * wires to the sampler's initImage input; inpaint and reference images are
+     * out of scope.
+     */
+    val imageInput = NodeType(
+        name = IMAGE_INPUT,
+        title = "图片输入",
+        outputs = listOf(Port("image", "IMAGE")),
+        widgets = listOf(
+            Widget("path", "初始图", "text", ""),
+            Widget("strength", "强度", "float", DEFAULT_IMG2IMG_STRENGTH),
+        ),
+    )
+
+    val registry: Map<String, NodeType> =
+        listOf(prompt, sdSampler, output, imageInput).associateBy { it.name }
 }

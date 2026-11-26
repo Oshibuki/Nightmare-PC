@@ -1,5 +1,7 @@
 package com.abrah.nightmare.desktop.gui
 
+import androidx.compose.foundation.BasicTooltipBox
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberBasicTooltipState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -19,6 +22,7 @@ import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.OutlinedTextField
+import androidx.compose.material.Surface
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -31,9 +35,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.PopupPositionProvider
 import com.abrah.nightmare.agent.ChatItem
 import com.abrah.nightmare.desktop.graph.DesktopNodeTypes
 import com.abrah.nightmare.desktop.graph.Node
@@ -108,6 +117,8 @@ fun ChatModeScreen(
                     onDraftChange = { draft = it },
                     running = state.running,
                     awaitingAsk = state.awaitingAsk,
+                    replayTooltip = state.replayTooltip(),
+                    onReplay = { state.replayLast() },
                     onSend = {
                         val text = draft.trim()
                         // A refused send (a turn is live) keeps the typed text.
@@ -312,6 +323,8 @@ private fun ChatComposer(
     onDraftChange: (String) -> Unit,
     running: Boolean,
     awaitingAsk: Boolean,
+    replayTooltip: String?,
+    onReplay: () -> Unit,
     onSend: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -340,11 +353,61 @@ private fun ChatComposer(
         Button(onClick = onSend, enabled = (!running || awaitingAsk) && draft.isNotBlank()) {
             Text(if (running && !awaitingAsk) "运行中" else if (awaitingAsk) "发送新指令" else "发送")
         }
+        Spacer(modifier = Modifier.width(8.dp))
+        // One replay entry beside the composer. The draft is never read here:
+        // replay sends the last *already sent* sentence through ChatSession.
+        ReplayButton(tooltip = replayTooltip, running = running, awaitingAsk = awaitingAsk, onClick = onReplay)
         if (running) {
             Spacer(modifier = Modifier.width(8.dp))
             // The one user-facing cancel entry: ChatSession cancels the turn
             // cooperatively (and releases any waiting Ask) through one path.
             Button(onClick = onCancel) { Text("取消", fontSize = 12.sp) }
+        }
+    }
+}
+
+/** A tooltip below the button, using the compose foundation API already on the classpath. */
+private object BelowAnchor : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset = IntOffset(anchorBounds.left, anchorBounds.bottom)
+}
+
+/**
+ * 单一「重发上一句」入口：tooltip 展示 ChatSession 截断后的上一句；运行中禁用
+ * 并提示「运行中」，追问等待期间与发送按钮同规放行。既有 tooltip 组件由当前
+ * Compose foundation 直接提供，不为此引入新依赖。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ReplayButton(
+    tooltip: String?,
+    running: Boolean,
+    awaitingAsk: Boolean,
+    onClick: () -> Unit,
+) {
+    BasicTooltipBox(
+        positionProvider = BelowAnchor,
+        tooltip = {
+            Surface(color = Color(0xFF243049), shape = RoundedCornerShape(6.dp)) {
+                Text(
+                    tooltip?.let { "重发：$it" } ?: "还没有可重发的话",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(8.dp),
+                )
+            }
+        },
+        state = rememberBasicTooltipState(),
+    ) {
+        Button(
+            onClick = onClick,
+            enabled = tooltip != null && (!running || awaitingAsk),
+        ) {
+            Text(if (running && !awaitingAsk) "运行中" else "重发上一句", fontSize = 12.sp)
         }
     }
 }
