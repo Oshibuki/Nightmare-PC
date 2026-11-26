@@ -9,6 +9,27 @@ import java.util.IdentityHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** The one GUI-wide 出图步数上限, shared by edits, prompts and the CLI projection. */
+const val MAX_RUN_STEPS = 20
+
+/**
+ * Clamp only a parseable integer above [MAX_RUN_STEPS]. Values at or below the
+ * cap — and anything unparseable — stay untouched: the CLI owns the error for
+ * bad flags, and the GUI must not silently swallow them.
+ */
+private fun parsedSteps(value: String): Int? = value.trim().toIntOrNull()
+
+private fun cappedSteps(value: String): String {
+    val parsed = parsedSteps(value) ?: return value
+    return if (parsed > MAX_RUN_STEPS) MAX_RUN_STEPS.toString() else value
+}
+
+/** Null means [value] is a legal `steps` edit; otherwise the tool/UI rejection reason. */
+internal fun stepsRejectionReason(value: String): String? {
+    val parsed = parsedSteps(value) ?: return "steps 必须是整数"
+    return if (parsed > MAX_RUN_STEPS) "steps 最大 $MAX_RUN_STEPS" else null
+}
+
 /**
  * Drives the stateless CLI as a child process and owns its handle (ADR-0009).
  * The GUI projects the workflow into arguments here; it never calls `Cli.run`
@@ -210,7 +231,7 @@ class WorkflowRunner(private val config: RunConfig = RunConfig()) {
             listOf(
                 "--sampler" to params["sampler"]?.let(::engineSampler),
                 "--scheduler" to params["scheduler"]?.let(::engineScheduler),
-                "--steps" to params["steps"],
+                "--steps" to params["steps"]?.let(::cappedSteps),
                 "--cfg-scale" to params["cfgScale"],
                 "--seed" to params["seed"],
                 "--width" to params["width"],
@@ -225,10 +246,10 @@ class WorkflowRunner(private val config: RunConfig = RunConfig()) {
     }
 
     /**
-     * Only the CLI projection is normalized: the persisted/workflow value and
-     * `paramsFor()` metadata keep exactly what the user or a tool wrote. An
-     * unknown value is passed through so the CLI can report the bad flag; the
-     * GUI must not silently swallow it.
+     * Only the CLI projection and the result metadata are normalized: the
+     * persisted/workflow value keeps exactly what the user or a tool wrote.
+     * Unknown values pass through so the CLI can report the bad flag; the GUI
+     * must not silently swallow them.
      */
     private fun engineSampler(value: String): String =
         engineValue(value, SamplerWire.SAMPLERS, SamplerWire::samplerLabel)
@@ -251,7 +272,10 @@ class WorkflowRunner(private val config: RunConfig = RunConfig()) {
     private fun paramsFor(workflow: Workflow): Map<String, String> {
         val prompt = workflow.nodes.firstOrNull { it.type == DesktopNodeTypes.PROMPT }?.params.orEmpty()
         val sampler = workflow.nodes.firstOrNull { it.type == DesktopNodeTypes.SD_SAMPLER }?.params.orEmpty()
-        return prompt + sampler
+        // PNG metadata must describe the run that actually happened, not the
+        // uncapped value someone typed or loaded from an older workflow.
+        val steps = sampler["steps"]?.let(::cappedSteps)
+        return if (steps == null) prompt + sampler else (prompt + sampler) + ("steps" to steps)
     }
 
     /** An explicit config timeout wins; otherwise the shell's field decides. */

@@ -30,6 +30,15 @@ class ChatSessionTest {
     }
 
     @Test
+    fun `the system prompt states the steps cap and that oversized values are refused`() {
+        val prompt = ChatSession.SYSTEM_PROMPT
+
+        assertTrue("the cap must be visible to the model: $prompt", prompt.contains("20"))
+        assertTrue("steps and the cap must be linked: $prompt", prompt.contains("steps"))
+        assertTrue("oversized values must be called out: $prompt", prompt.contains("拒绝") || prompt.contains("钳制"))
+    }
+
+    @Test
     fun `one sentence drives five tool commands a fake CLI render and a Picture bubble`() {
         assumePosix()
         val (config, png) = fakeCliPng("chat-session-test", "chat-result.png", captureArgv = true)

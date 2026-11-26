@@ -61,7 +61,8 @@ object DesktopToolCommands {
                     name,
                     "给已有节点设置一个参数，例如 prompt 节点的 prompt 或 sampler 节点的 seed；value 一律传字符串。" +
                         "调度器 scheduler 必须传 CLI 值（discrete、karras 等），不要传 normal；" +
-                        "采样器 sampler 传引擎名（如 euler、dpm++2m），不要传显示名。",
+                        "采样器 sampler 传引擎名（如 euler、dpm++2m），不要传显示名；" +
+                        "steps 最大 $MAX_RUN_STEPS，超过会被拒绝；旧工作流里更大的步数在运行时钳制为 $MAX_RUN_STEPS。",
                     JSONObject()
                         .put("nodeId", JSONObject().put("type", "string").put("description", "已有节点的 id。"))
                         .put("key", JSONObject().put("type", "string").put("description", "参数名，例如 prompt、negative、seed、steps。"))
