@@ -9,10 +9,11 @@ import java.net.URL
 import java.time.LocalDate
 
 /**
- * The save-time connectivity check. Deliberately separate from
- * `LlmClient.models()` (20 s connect / 180 s read): this one is 3 s / 8 s and
- * never blocks saving. It reuses the copied core's pure [LlmClient.fitsChat]
- * rule to choose a chat-capable model, without touching the core's timeouts.
+ * The save-time connectivity check: one bounded 3 s connect / 8 s read GET
+ * that never blocks saving. It reuses the copied core's pure [LlmClient.fitsChat]
+ * rule to choose a chat-capable model. [LlmClient.models()] now uses the same
+ * short timeouts, so a bad base URL fails fast there too; the probe still owns
+ * the save-time path so saving never waits on model selection.
  * A local CUSTOM server may omit `supported_parameters` while advertising chat
  * or tool calling in `labels`; only then, and only for CUSTOM, a sorted label
  * fallback keeps auto-selection working.
