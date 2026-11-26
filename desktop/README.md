@@ -168,6 +168,31 @@ comes from the same `ChatProviderSettings.resolved()` seam and connectivity
 from the same `ProviderProbe` as the chat shell — no separate HTTP logic and
 no longer timeouts are introduced.
 
+### Application-level real-provider verification (opt-in)
+
+`verify-gui.sh` stays offline by design (ADR-0011); the `chat-turn` step proves
+the tool loop with a scripted fake ChatModel. To verify the *application*
+itself — the copied `Agent` + `LlmClient` driving a real OpenAI-compatible
+service into the desktop workflow — run separately from `desktop/`:
+
+```bash
+export JAVA_HOME=/home/chjlxxc/Android/jdk-17
+export NIGHTMARE_LLM_PROVIDER=CUSTOM
+export NIGHTMARE_LLM_BASE_URL=http://127.0.0.1:13305/v1
+export NIGHTMARE_LLM_MODEL=Qwen3.5-4B-GGUF
+timeout 300s bash ./gradlew --no-daemon -q :gui:verifyRealProvider
+```
+
+It sends one Chinese sentence through a real `ProviderChatModel` (never an
+injected fake) and prints every chat bubble as evidence. With no config it
+prints `SKIP` and exits `0` without a network call. It passes when three
+observable criteria hold: the service returned `tool_calls`, the workflow was
+changed by those tools, and a picture bubble appeared with a real file. The
+render uses a fake CLI on purpose — this verifies the agent/tool/workflow
+chain, not engine image quality. A local endpoint (e.g. Lemonade on `:13305`,
+Ollama on `:11434`, llama-server on `:8001`) needs no API key. The full run and
+its evidence are recorded in `.scratch/real-provider-verification/`.
+
 Graphics are opt-in: `VERIFY_GUI_LAUNCH=1` adds the `:gui:run` step. It uses an
 existing `DISPLAY` as-is, wraps with `xvfb-run -a` on a headless machine that
 has Xvfb, and logs `已跳过（无显示且无 xvfb-run）` when neither exists. The reference

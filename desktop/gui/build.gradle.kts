@@ -38,6 +38,16 @@ tasks.register<JavaExec>("providerDiagnostics") {
     mainClass.set("com.abrah.nightmare.desktop.gui.ProviderDiagnosticsMainKt")
 }
 
+// Opt-in real-provider verification: drives the application (Agent + LlmClient)
+// against a local OpenAI-compatible service — never part of verify-gui.sh (ADR-0011).
+// With no NIGHTMARE_LLM_* config it prints SKIP and exits 0 without a network call.
+tasks.register<JavaExec>("verifyRealProvider") {
+    group = "application"
+    description = "Verify the app drives a real LLM into the desktop workflow; SKIP without config."
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.abrah.nightmare.desktop.gui.RealProviderVerificationMain")
+}
+
 compose.desktop {
     application {
         mainClass = "com.abrah.nightmare.desktop.gui.MainKt"
