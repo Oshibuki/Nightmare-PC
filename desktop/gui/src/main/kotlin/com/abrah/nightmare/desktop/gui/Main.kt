@@ -26,10 +26,12 @@ fun main() = singleWindowApplication(
     // in memory across mode switches. The session/runner above are still the
     // single workflow and run state all three shells share (ADR-0008/0009).
     val chatState = remember(session, runner) { ChatSession(session, runner) }
-    // Window close disposes this effect (a mode switch does not), so a run
-    // started in either mode is ended once for the whole window (ADR-0009).
-    DisposableEffect(runner) {
-        onDispose { WorkflowRunner.cancelActiveProcess(runner.processHandle()) }
+    // Window close disposes this effect (a mode switch does not). The chat
+    // state owns the single cancel/window-close entry, so Ask release and the
+    // ADR-0009 CLI cleanup happen together; the other shells keep using the
+    // same runner and its unchanged cancel semantics.
+    DisposableEffect(chatState) {
+        onDispose { chatState.closeWindow() }
     }
 
     MaterialTheme {

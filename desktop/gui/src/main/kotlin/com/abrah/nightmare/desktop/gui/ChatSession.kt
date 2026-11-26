@@ -31,6 +31,8 @@ class ChatSession(
         Thread(runnable, "gui-chat-turn").apply { isDaemon = true }.start()
     },
     askTimeoutMillis: Long = AskGate.DEFAULT_TIMEOUT_MILLIS,
+    // Production uses the ADR-0009 window-close path; tests count the call.
+    private val onCloseProcess: () -> Unit = { WorkflowRunner.cancelActiveProcess(runner.processHandle()) },
 ) {
     private val items = Collections.synchronizedList(mutableListOf<ChatItem>())
     private val listeners = mutableListOf<() -> Unit>()
@@ -84,13 +86,41 @@ class ChatSession(
     fun answer(id: Int, option: String): Boolean = gate.answer(id, option)
 
     /**
-     * The cancellation primitive for ticket 12's single cancel/window-close
-     * entry: release every waiter with CANCEL and ask the live turn to stop at
-     * its next step. It never touches the CLI process — ADR-0009 stays in 12.
+     * The cancellation primitive ticket 12's single entry builds on: release
+     * every waiter with CANCEL and ask the live turn to stop at its next step.
+     * It never touches the CLI process — ADR-0009 stays in the window-close
+     * branch of [cancelTurn]/[closeWindow].
      */
     fun cancelPendingAsks(): Int {
         turnCancel.set(true)
         return gate.cancelAll()
+    }
+
+    /**
+     * The one cancel entry the chat shell's 「取消」 button calls. Cooperative
+     * by design: it flags the turn and releases any waiting Ask, then lets the
+     * in-flight tool finish. It never interrupts the turn thread and never
+     * destroys the CLI child — only [closeWindow] does that.
+     */
+    fun cancelTurn() = cancel(cleanupProcess = false)
+
+    /**
+     * The one window-close entry, called from Main.kt's window-level
+     * DisposableEffect. It runs the same Ask/flag orchestration as [cancelTurn]
+     * and only then destroys the CLI child through the existing ADR-0009 path.
+     * A mode switch never disposes that effect, so switching shells keeps the
+     * turn and its process alive.
+     */
+    fun closeWindow() = cancel(cleanupProcess = true)
+
+    private fun cancel(cleanupProcess: Boolean) {
+        val wasRunning = turnActive.get()
+        val alreadyCancelled = turnCancel.get()
+        cancelPendingAsks() // ticket 11's primitive also raises the turn flag
+        if (wasRunning && !alreadyCancelled) {
+            postToUi { append(ChatItem.Assistant(CANCELLED_BUBBLE)) }
+        }
+        if (cleanupProcess) onCloseProcess()
     }
 
     /** Immutable bubble list for the shell; reads never see a partial emit. */
@@ -116,8 +146,9 @@ class ChatSession(
             val busy = turnActive.get()
             if (busy && !gate.awaiting) return false
             if (busy) {
-                gate.cancelAll() // CANCEL handshake before the new sentence
-                turnCancel.set(true)
+                // CANCEL handshake before the new sentence, using ticket 11's
+                // primitive rather than a second Ask-release implementation.
+                cancelPendingAsks()
             } else {
                 turnActive.set(true)
             }
@@ -169,5 +200,10 @@ class ChatSession(
     private fun notifyChanged() {
         val current = synchronized(listeners) { listeners.toList() }
         current.forEach { it() }
+    }
+
+    companion object {
+        /** The visible marker on the turn bubble after a cancel. */
+        const val CANCELLED_BUBBLE = "已取消"
     }
 }
