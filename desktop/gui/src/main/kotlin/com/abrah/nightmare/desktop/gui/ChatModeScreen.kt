@@ -100,8 +100,10 @@ fun ChatModeScreen(
                     awaitingAsk = state.awaitingAsk,
                     onSend = {
                         val text = draft.trim()
+                        // A refused send (a turn is live) keeps the typed text.
                         if (text.isNotBlank() && state.send(text)) draft = ""
                     },
+                    onCancel = { state.cancelTurn() },
                 )
             }
 
@@ -282,6 +284,7 @@ private fun ChatComposer(
     running: Boolean,
     awaitingAsk: Boolean,
     onSend: () -> Unit,
+    onCancel: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().background(Color.White).padding(12.dp),
@@ -307,6 +310,12 @@ private fun ChatComposer(
         // An Ask wait is not busy work: typing here is the documented bypass.
         Button(onClick = onSend, enabled = (!running || awaitingAsk) && draft.isNotBlank()) {
             Text(if (running && !awaitingAsk) "运行中" else if (awaitingAsk) "发送新指令" else "发送")
+        }
+        if (running) {
+            Spacer(modifier = Modifier.width(8.dp))
+            // The one user-facing cancel entry: ChatSession cancels the turn
+            // cooperatively (and releases any waiting Ask) through one path.
+            Button(onClick = onCancel) { Text("取消", fontSize = 12.sp) }
         }
     }
 }
