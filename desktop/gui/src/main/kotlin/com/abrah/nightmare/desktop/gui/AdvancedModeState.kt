@@ -193,6 +193,9 @@ class AdvancedModeState(
         val node = session.workflow.byId[nodeId] ?: return false
         val type = DesktopNodeTypes.registry[node.type] ?: return false
         if (type.widgets.none { it.name == key }) return false
+        // The canvas owns layout/wiring, but the steps cap is a run-safety rule:
+        // route edits through the same validation the default mode and tools use.
+        if (key == "steps" && stepsRejectionReason(value) != null) return false
         apply(canvas.setParam(nodeId, key, value))
         return true
     }

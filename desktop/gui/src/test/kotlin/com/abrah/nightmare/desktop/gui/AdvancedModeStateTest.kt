@@ -116,6 +116,23 @@ class AdvancedModeStateTest {
     }
 
     @Test
+    fun `advanced mode refuses an oversized steps edit and keeps the workflow unchanged`() {
+        val session = WorkflowSession()
+        val advancedState = AdvancedModeState(session)
+        assertTrue(advancedState.selectNode("sampler"))
+
+        val before = session.workflow.toJson()
+        assertFalse(advancedState.setSelectedParameter("steps", "50"))
+        assertEquals(before, session.workflow.toJson())
+        assertEquals("20", advancedState.snapshot().fields.single { it.key == "steps" }.value)
+
+        assertFalse(advancedState.setSelectedParameter("steps", "abc"))
+        assertEquals(before, session.workflow.toJson())
+        assertTrue(advancedState.setSelectedParameter("steps", "20"))
+        assertEquals("20", session.workflow.byId["sampler"]!!.params["steps"])
+    }
+
+    @Test
     fun `a node added in advanced mode appears in the default chain rail`() {
         val session = WorkflowSession(Workflow())
         val defaultState = DefaultModeState(session)
