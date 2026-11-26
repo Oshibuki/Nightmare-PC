@@ -17,6 +17,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.util.Collections
 
 /**
@@ -105,6 +106,10 @@ class ChatSessionTest {
         assertEquals(RunStatus.SUCCESS, run.status)
         assertEquals(png.path, run.results.single().path)
         assertEquals("11", run.results.single().params["seed"])
+        val argv = argvOf(config)
+        assertEquals("txt2img", argv.first())
+        assertNull("a txt2img turn carries no init image", argvValue(argv, "--init-img"))
+        assertEquals("1", argvValue(argv, "--batch"))
         assertFalse(chat.running)
     }
 
@@ -336,7 +341,158 @@ class ChatSessionTest {
         awaitStatePolling(chat) { !chat.running }
     }
 
+    @Test
+    fun `the system prompt teaches the image node its params and img2img ports`() {
+        val prompt = ChatSession.SYSTEM_PROMPT
+
+        assertTrue("the image node type must be legal: $prompt", prompt.contains(DesktopNodeTypes.IMAGE_INPUT))
+        assertTrue("the sampler initImage port must be named: $prompt", prompt.contains("initImage"))
+        assertTrue("the path param must be named: $prompt", prompt.contains("path"))
+        assertTrue("the strength param must be named: $prompt", prompt.contains("strength"))
+        assertTrue("the default strength must be visible: $prompt", prompt.contains("0.75"))
+        assertTrue("the 0..1 range must be visible: $prompt", prompt.contains("0..1") || prompt.contains("0 到 1"))
+    }
+
+    @Test
+    fun `the tool schema gives real providers the image type path strength and initImage port`() {
+        var seenTools: JSONArray? = null
+        val model = object : ChatModel {
+            override fun complete(messages: JSONArray, tools: JSONArray): JSONObject {
+                seenTools = tools
+                return words("ok")
+            }
+        }
+        val chat = ChatSession(model = model, postToUi = { it.run() }, startTurn = { it.run() })
+        assertTrue(chat.send("hello"))
+
+        val tools = checkNotNull(seenTools)
+        fun schema(name: String): JSONObject = (0 until tools.length())
+            .map { tools.getJSONObject(it).getJSONObject("function") }
+            .first { it.getString("name") == name }
+
+        val add = schema("add_node")
+        val props = add.getJSONObject("parameters").getJSONObject("properties")
+        val enum = props.getJSONObject("type").getJSONArray("enum")
+        assertTrue(
+            "core.image must be in the add_node type enum",
+            (0 until enum.length()).map { enum.getString(it) }.contains(DesktopNodeTypes.IMAGE_INPUT),
+        )
+        assertTrue("the description must name core.image", add.getString("description").contains(DesktopNodeTypes.IMAGE_INPUT))
+        assertTrue(
+            "the model must see path and strength as string params",
+            props.getJSONObject("params").getString("description").let { it.contains("path") && it.contains("strength") },
+        )
+        assertTrue("connect must teach the initImage port", schema("connect").getString("description").contains("initImage"))
+    }
+
+    @Test(timeout = 20_000)
+    fun `one sentence drives an img2img turn through the five existing commands`() {
+        assumePosix()
+        val initPath = "/tmp/nm-desktop-base.png"
+        val (config, png) = fakeCliPng("chat-img2img-test", "img2img-result.png", captureArgv = true)
+        val session = WorkflowSession(Workflow())
+        val runner = WorkflowRunner(config)
+        val add = { id: String, type: String -> JSONObjectOf("id" to id, "type" to type) }
+        val imageArgs = JSONObject()
+            .put("id", "base")
+            // The short alias exercises the same name -> command mapping real models use.
+            .put("type", "image")
+            .put("params", JSONObject().put("path", initPath).put("strength", "0.4"))
+            .toString()
+        val model = ScriptChatModel(
+            toolCall("m1", "new_workflow", "{}"),
+            toolCall("m2", "add_node", imageArgs),
+            toolCall("m3", "add_node", add("prompt", DesktopNodeTypes.PROMPT)),
+            toolCall("m4", "add_node", add("sampler", DesktopNodeTypes.SD_SAMPLER)),
+            toolCall("m5", "add_node", add("output", DesktopNodeTypes.OUTPUT)),
+            toolCall("m6", "connect", JSONObjectOf("fromNode" to "base", "toNode" to "sampler", "toPort" to "initImage")),
+            toolCall("m7", "connect", JSONObjectOf("fromNode" to "prompt", "toNode" to "sampler", "toPort" to "prompt")),
+            toolCall("m8", "connect", JSONObjectOf("fromNode" to "sampler", "toNode" to "output", "toPort" to "image")),
+            toolCall("m9", "run", "{}"),
+            words("redrawn"),
+        )
+        val chat = ChatSession(
+            session = session,
+            runner = runner,
+            model = model,
+            postToUi = { it.run() },
+            startTurn = { it.run() },
+        )
+
+        assertTrue(chat.send("用这张图按这句描述重画"))
+
+        val shown = chat.snapshot()
+        val tools = shown.filterIsInstance<ChatItem.Tool>()
+        assertEquals(9, tools.size)
+        assertTrue("every img2img tool call was accepted", tools.all { it.ok })
+        assertEquals("redrawn", (shown.last() as ChatItem.Assistant).text)
+        assertTrue("the PNG became a Picture bubble", ChatItem.Picture(png.path) in shown)
+        assertTrue("engine日志走日志面板，不进气泡", shown.none { it is ChatItem.Log })
+
+        val imageNode = session.workflow.nodes.first { it.type == DesktopNodeTypes.IMAGE_INPUT }
+        assertEquals(initPath, imageNode.params["path"])
+        assertEquals("0.4", imageNode.params["strength"])
+        val sampler = session.workflow.nodes.first { it.type == DesktopNodeTypes.SD_SAMPLER }
+        assertEquals("base", sampler.inputs["initImage"]?.node)
+
+        val argv = argvOf(config)
+        assertEquals("img2img", argv.first())
+        assertEquals(initPath, argvValue(argv, "--init-img"))
+        assertEquals("0.4", argvValue(argv, "--strength"))
+        assertNull("img2img has no --batch", argvValue(argv, "--batch"))
+
+        val run = runner.snapshot()
+        assertEquals(RunStatus.SUCCESS, run.status)
+        assertEquals(png.path, run.results.single().path)
+        assertFalse(chat.running)
+    }
+
+    @Test(timeout = 20_000)
+    fun `an image node added without strength carries the 0 75 default into the run`() {
+        assumePosix()
+        val initPath = "/tmp/nm-desktop-default-base.png"
+        val (config, png) = fakeCliPng("chat-img2img-default-test", "default-result.png", captureArgv = true)
+        val session = WorkflowSession(Workflow())
+        val runner = WorkflowRunner(config)
+        val imageArgs = JSONObject()
+            .put("id", "base")
+            .put("type", DesktopNodeTypes.IMAGE_INPUT)
+            .put("params", JSONObject().put("path", initPath))
+            .toString()
+        val model = ScriptChatModel(
+            toolCall("d1", "new_workflow", "{}"),
+            toolCall("d2", "add_node", imageArgs),
+            toolCall("d3", "add_node", JSONObjectOf("id" to "sampler", "type" to DesktopNodeTypes.SD_SAMPLER)),
+            toolCall("d4", "connect", JSONObjectOf("fromNode" to "base", "toNode" to "sampler", "toPort" to "initImage")),
+            toolCall("d5", "run", "{}"),
+            words("default done"),
+        )
+        val chat = ChatSession(
+            session = session,
+            runner = runner,
+            model = model,
+            postToUi = { it.run() },
+            startTurn = { it.run() },
+        )
+
+        assertTrue(chat.send("按默认强度重画"))
+
+        assertTrue("every tool call was accepted", chat.snapshot().filterIsInstance<ChatItem.Tool>().all { it.ok })
+        assertEquals("0.75", session.workflow.nodes.first { it.type == DesktopNodeTypes.IMAGE_INPUT }.params["strength"])
+        assertEquals("0.75", argvValue(argvOf(config), "--strength"))
+        assertEquals(RunStatus.SUCCESS, runner.snapshot().status)
+        assertTrue(ChatItem.Picture(png.path) in chat.snapshot())
+    }
+
     // ---- harness: POSIX fake CLI + bounded waits come from ChatTestHarness --
+
+    private fun argvOf(config: RunConfig): List<String> =
+        File(File(config.cliExecutable).parentFile, "argv.txt").readLines()
+
+    private fun argvValue(argv: List<String>, flag: String): String? {
+        val index = argv.indexOf(flag)
+        return if (index < 0) null else argv.getOrNull(index + 1)
+    }
 
     private fun JSONObjectOf(vararg pairs: Pair<String, String>): String =
         JSONObject().apply { pairs.forEach { (key, value) -> put(key, value) } }.toString()

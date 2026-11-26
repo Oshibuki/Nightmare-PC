@@ -240,24 +240,31 @@ class ChatSession(
     companion object {
         /**
          * 真实模型只看到这段系统提示和工具的 JSON schema（ADR-0012）：名字、
-         * 三种节点类型、id 规则、端口名与调用顺序都必须写在这里，否则模型会
-         * 猜出被 ToolInterface 拒绝的 id 或节点类型。
+         * 四种节点类型、id 规则、端口名、图生图参数与调用顺序都必须写在这里，
+         * 否则模型会猜出被 ToolInterface 拒绝的 id 或节点类型。
          */
         val SYSTEM_PROMPT: String = """
             你是桌面出图助手。用可用工具修改唯一的桌面工作流并运行，最后用一句话说明结果。
 
             可用工具只有五个：new_workflow（新建空工作流）、add_node（添加节点）、
             set_parameter（设置已有节点参数）、connect（连线）、run（运行工作流）。
-            合法节点类型只有三种：core.prompt（提示词）、sd.sample（采样器）、core.output（输出）。
+            合法节点类型只有四种：core.prompt（提示词）、core.image（图片输入）、sd.sample（采样器）、core.output（输出）。
             add_node 的 id 必须唯一，只能使用字母、数字、下划线 _ 或连字符 -，不支持其它字符或重复 id。
             所有工具参数与节点参数的值一律是字符串，数字也要写成字符串，例如 steps 传 "20"。
             sd.sample 的 steps 最大 $MAX_RUN_STEPS：超过会被拒绝；载入的旧工作流里更大的步数在运行时钳制为 $MAX_RUN_STEPS。
             sd.sample 的 scheduler 必须传 CLI 值（discrete、karras、exponential、sgm_uniform、simple、beta 等），不要传 normal 或 Normal；
             sampler 必须传引擎名（如 euler、dpm++2m），不要传显示名。
-            端口名：core.prompt 输出 prompt；sd.sample 输入 prompt、输出 image；core.output 输入 image。
+            端口名：core.prompt 输出 prompt；core.image 输出 image；sd.sample 输入 prompt 与 initImage、输出 image；core.output 输入 image。
+            图生图（img2img）：用 core.image 节点提供本地 PNG 图片路径与重绘强度；path 是字符串形式的本地图片路径，
+            strength 是 0..1 的字符串，默认 "0.75"（不写 strength 时自动取默认值）。
+            把 core.image 的 image 输出连到 sd.sample 的 initImage 输入，prompt 仍连到 sd.sample 的 prompt；
+            工作流里有 core.image 时运行器会投影成 img2img 子命令（带 --init-img/--strength，没有 --batch）。
             典型流程：new_workflow → add_node 三次（prompt、sampler、output）→
             connect 两次（prompt:prompt 到 sampler:prompt，sampler:image 到 output:image）→
             set_parameter 设置提示词或种子 → run。
+            图生图流程：new_workflow → add_node（core.image，写 path 与 strength）→
+            add_node（prompt、sampler、output）→
+            connect 三次（core.image:image 到 sampler:initImage、prompt:prompt 到 sampler:prompt、sampler:image 到 output:image）→ run。
         """.trimIndent()
 
         /** The visible marker on the turn bubble after a cancel. */
