@@ -13,13 +13,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 const val MAX_RUN_STEPS = 20
 
 /**
- * Mirrors the CLI's img2img default. A workflow's written strength is passed
- * through untouched: the CLI owns the 0..1 usage check (ADR-0013), so the GUI
- * must not silently clamp it.
- */
-private const val DEFAULT_IMG2IMG_STRENGTH = "0.75"
-
-/**
  * Clamp only a parseable integer above [MAX_RUN_STEPS]. Values at or below the
  * cap — and anything unparseable — stay untouched: the CLI owns the error for
  * bad flags, and the GUI must not silently swallow them.
@@ -262,9 +255,12 @@ class WorkflowRunner(private val config: RunConfig = RunConfig()) {
             args += listOf("--batch", config.batch.toString())
         } else {
             args += listOf("--init-img", imageNode.params["path"] ?: "")
+            // A written strength is passed through untouched: the CLI owns the
+            // 0..1 usage check (ADR-0013), so the GUI must not silently clamp it.
             args += listOf(
                 "--strength",
-                imageNode.params["strength"]?.takeIf { it.isNotBlank() } ?: DEFAULT_IMG2IMG_STRENGTH,
+                imageNode.params["strength"]?.takeIf { it.isNotBlank() }
+                    ?: DesktopNodeTypes.DEFAULT_IMG2IMG_STRENGTH,
             )
         }
         return args

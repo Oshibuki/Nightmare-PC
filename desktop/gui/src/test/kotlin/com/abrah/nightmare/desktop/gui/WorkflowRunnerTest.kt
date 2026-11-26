@@ -187,6 +187,23 @@ class WorkflowRunnerTest {
     }
 
     @Test
+    fun `an image node with no strength projects the shared img2img default`() {
+        assumePosix()
+        // The spec fixes the default at 0.75; the node widget and the runner's
+        // blank-strength fallback must read the same core constant (no drift).
+        assertEquals("0.75", DesktopNodeTypes.DEFAULT_IMG2IMG_STRENGTH)
+        assertEquals(
+            DesktopNodeTypes.DEFAULT_IMG2IMG_STRENGTH,
+            DesktopNodeTypes.imageInput.createNode("init").params["strength"],
+        )
+        val run = runFake(
+            imageNames = listOf("blank-strength.png"),
+            workflow = workflowWithImageNode("/tmp/init.png", strength = ""),
+        )
+        assertEquals(DesktopNodeTypes.DEFAULT_IMG2IMG_STRENGTH, run.argvValue("--strength"))
+    }
+
+    @Test
     fun `strength passes through unchanged while workflows without an image node stay txt2img`() {
         assumePosix()
         val chosen = runFake(

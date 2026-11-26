@@ -139,7 +139,8 @@ class ChatSession(
     }
 
     /** Truncated preview for the single replay button's tooltip. */
-    fun replayTooltip(maxChars: Int = 48): String? = lastUserText()?.let { text ->
+    fun replayTooltip(): String? = lastUserText()?.let { text ->
+        val maxChars = 48
         if (text.length <= maxChars) text else "${text.take(maxChars)}…"
     }
 

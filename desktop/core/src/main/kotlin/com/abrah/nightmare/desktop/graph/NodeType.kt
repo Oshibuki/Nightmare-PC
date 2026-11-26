@@ -82,6 +82,9 @@ object DesktopNodeTypes {
     const val OUTPUT = "core.output"
     const val IMAGE_INPUT = "core.image"
 
+    /** The one img2img strength default, shared by the node widget and the runner fallback. */
+    const val DEFAULT_IMG2IMG_STRENGTH = "0.75"
+
     val prompt = NodeType(
         name = PROMPT,
         title = "提示词",
@@ -134,7 +137,7 @@ object DesktopNodeTypes {
         outputs = listOf(Port("image", "IMAGE")),
         widgets = listOf(
             Widget("path", "初始图", "text", ""),
-            Widget("strength", "强度", "float", "0.75"),
+            Widget("strength", "强度", "float", DEFAULT_IMG2IMG_STRENGTH),
         ),
     )
 
