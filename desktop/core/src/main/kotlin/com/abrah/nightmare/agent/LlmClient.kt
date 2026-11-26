@@ -50,6 +50,12 @@ class LlmClient(
      * ⚠ Not sent elsewhere: OpenAI's newer models refuse `max_tokens` (`max_completion_tokens`).
      */
     private val capReply: Boolean = false,
+    /** ⭐ A wrong base URL must report in seconds; inference keeps its long timeouts. */
+    private val modelsConnectTimeoutMs: Int = MODELS_CONNECT_TIMEOUT_MS,
+    private val modelsReadTimeoutMs: Int = MODELS_READ_TIMEOUT_MS,
+    /** The network boundary; production opens a real [HttpURLConnection]. */
+    private val openConnection: (String) -> HttpURLConnection =
+        { URL(it).openConnection() as HttpURLConnection },
 ) : ChatModel {
 
     override fun complete(messages: JSONArray, tools: JSONArray): JSONObject {
@@ -71,7 +77,12 @@ class LlmClient(
             .put("messages", messages)
         maxTokens?.let { body.put("max_tokens", it) }
         if (tools.length() > 0) body.put("tools", tools).put("tool_choice", "auto")
-        val reply = JSONObject(request("POST", "/chat/completions", body.toString()))
+        val reply = JSONObject(
+            request(
+                "POST", "/chat/completions", body.toString(),
+                INFERENCE_CONNECT_TIMEOUT_MS, INFERENCE_READ_TIMEOUT_MS,
+            ),
+        )
         val choice = reply.optJSONArray("choices")?.optJSONObject(0)
             ?: throw LlmError("the provider sent no answer: ${reply.toString().take(300)}")
         return choice.optJSONObject("message") ?: throw LlmError("the provider's answer has no message")
@@ -83,7 +94,9 @@ class LlmClient(
      * name typed by hand is still used as it is.
      */
     fun models(chatOnly: Boolean = false): List<String> {
-        val reply = JSONObject(request("GET", "/models", null))
+        val reply = JSONObject(
+            request("GET", "/models", null, modelsConnectTimeoutMs, modelsReadTimeoutMs),
+        )
         val data = reply.optJSONArray("data") ?: return emptyList()
         val all = (0 until data.length()).mapNotNull { data.optJSONObject(it) }
         val budget = if (chatOnly) runCatching { perRequestBudget(all) }.getOrNull() else null
@@ -112,23 +125,32 @@ class LlmClient(
         val body = JSONObject().put("model", probe.getString("id")).put("max_tokens", maxOut)
             .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", "Reply with OK.")))
         return try {
-            request("POST", "/chat/completions", body.toString())
+            request(
+                "POST", "/chat/completions", body.toString(),
+                INFERENCE_CONNECT_TIMEOUT_MS, INFERENCE_READ_TIMEOUT_MS,
+            )
             null
         } catch (e: LlmError) {
             affordable(e.message.orEmpty())?.let { it * cp }
         }
     }
 
-    private fun request(method: String, path: String, body: String?): String {
+    private fun request(
+        method: String,
+        path: String,
+        body: String?,
+        connectTimeoutMs: Int,
+        readTimeoutMs: Int,
+    ): String {
         val c = try {
-            (URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection)
+            openConnection(baseUrl.trimEnd('/') + path)
         } catch (e: Exception) {
             throw LlmError("bad provider address: $baseUrl")
         }
         try {
             c.requestMethod = method
-            c.connectTimeout = 20_000
-            c.readTimeout = 180_000
+            c.connectTimeout = connectTimeoutMs
+            c.readTimeout = readTimeoutMs
             if (key.isNotBlank()) c.setRequestProperty("Authorization", "Bearer $key")
             c.setRequestProperty("Accept", "application/json")
             // ⭐ OpenRouter's attribution headers; every other provider ignores them.
@@ -151,6 +173,14 @@ class LlmClient(
     }
 
     companion object {
+        /** ⭐ A misconfigured base URL is reported in seconds, not after three minutes. */
+        const val MODELS_CONNECT_TIMEOUT_MS = 3_000
+        const val MODELS_READ_TIMEOUT_MS = 8_000
+
+        /** Inference may think; these keep the copied mobile client's long timeouts. */
+        const val INFERENCE_CONNECT_TIMEOUT_MS = 20_000
+        const val INFERENCE_READ_TIMEOUT_MS = 180_000
+
         /** ⭐ The cap [capReply] sends; tool calls are short, but a reasoning model thinks inside it. */
         const val REPLY_TOKENS = 8_192
 
